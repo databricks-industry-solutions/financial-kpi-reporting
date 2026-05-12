@@ -1,0 +1,19 @@
+# Code ownership for financial-kpi-reporting
+#
+# Format: <path pattern>  <owner1> <owner2> ...
+# Owners listed here are auto-requested as reviewers on PRs touching the path
+# and gate merges when branch protection requires CODEOWNERS approval.
+
+# Default — every file requires review from a maintainer
+*                       @simonkuijpers @sujayd555
+
+# Workflows / supply-chain config — extra review required
+/.github/               @simonkuijpers @sujayd555
+/.github/workflows/     @simonkuijpers @sujayd555
+/.github/dependabot.yml @simonkuijpers @sujayd555
+
+# Security policy + publishing record — change requires re-review
+/SECURITY.md            @simonkuijpers @sujayd555
+/PUBLISHING.md          @simonkuijpers @sujayd555
+/LICENSE.md             @simonkuijpers @sujayd555
+/NOTICE.md              @simonkuijpers @sujayd555
