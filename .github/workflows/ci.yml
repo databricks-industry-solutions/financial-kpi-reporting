@@ -43,7 +43,7 @@ jobs:
         run: pip install uv
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -102,7 +102,7 @@ jobs:
           uv run pip-audit --strict --progress-spinner=off
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -160,7 +160,7 @@ jobs:
         run: pip install uv
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
