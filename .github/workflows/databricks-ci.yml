@@ -1,4 +1,4 @@
-name: Databricks Asset Bundles CI
+name: Databricks Asset Bundle CI
 
 on:
   pull_request:
@@ -8,110 +8,69 @@ on:
     branches:
       - main
 
-jobs:
-  validate-and-test:
-    runs-on: html_publisher
+# Smoke-tests the Asset Bundle on every PR/push: validate, then deploy the
+# `dev` target and tear it down. `bundle deploy` pushes the notebooks + built
+# wheel to the workspace (it does not run the notebooks or create Lakebase/Genie
+# resources — those are interactive setup steps), so this is a safe regression
+# check on the bundle config + build.
+#
+# Requires two repo secrets:
+#   DATABRICKS_HOST   e.g. https://<your-workspace>.cloud.databricks.com
+#   DATABRICKS_TOKEN  a token (or service-principal credential) for that workspace
+# When they're absent (e.g. on fork PRs), the bundle steps are skipped so the
+# check still passes.
 
+jobs:
+  bundle-smoke-test:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Check Databricks secrets
+        id: check
+        run: |
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DATABRICKS_HOST / DATABRICKS_TOKEN not configured — skipping the bundle smoke test."
+          fi
 
       - name: Set up Python
+        if: steps.check.outputs.configured == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
+      - name: Install uv
+        if: steps.check.outputs.configured == 'true'
+        run: pip install uv
+
+      - name: Set up Node
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Bun
+        if: steps.check.outputs.configured == 'true'
+        uses: oven-sh/setup-bun@v2
 
       - name: Set up Databricks CLI
+        if: steps.check.outputs.configured == 'true'
         uses: databricks/setup-cli@main
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DEPLOY_NOTEBOOK_TOKEN }}
-
-      - name: Configure Databricks CLI authentication
-        run: |
-          echo "[DEFAULT]" > ~/.databrickscfg
-          echo "host = ${{ secrets.DATABRICKS_HOST }}" >> ~/.databrickscfg
-          echo "token = ${{ secrets.DEPLOY_NOTEBOOK_TOKEN }}" >> ~/.databrickscfg
-
-      - name: Get or Create serverless SQL warehouse
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DEPLOY_NOTEBOOK_TOKEN }}
-        run: |
-          WAREHOUSE_NAME="Shared Unity Catalog Serverless"
-          echo "Looking for warehouse named: $WAREHOUSE_NAME"
-          
-          echo "Fetching existing warehouses..."
-          EXISTING_WAREHOUSE=$(curl -s -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-            "$DATABRICKS_HOST/api/2.0/sql/warehouses")
-          
-          echo "Warehouse List Response: $(echo $EXISTING_WAREHOUSE | sed 's/\"token\":\"[^\"]*\"/\"token\":\"***\"/g')"
-          
-          WAREHOUSE_ID=$(echo "$EXISTING_WAREHOUSE" | python3 -c "
-          import sys, json
-          import argparse
-
-          parser = argparse.ArgumentParser()
-          parser.add_argument('--name', required=True)
-          args = parser.parse_args()
-
-          try:
-              data = json.load(sys.stdin)
-              name = args.name
-              if 'warehouses' in data:
-                  warehouses = data['warehouses']
-                  matching = [w for w in warehouses if w['name'] == name]
-                  if matching:
-                      print(matching[0]['id'])
-                  else:
-                      print('')
-              else:
-                  print('')
-          except Exception as e:
-              print(f'Error parsing response: {str(e)}', file=sys.stderr)
-              print('')
-          " --name "$WAREHOUSE_NAME")
-          
-          if [ -z "$WAREHOUSE_ID" ]; then
-            echo "Creating new warehouse..."
-            RESPONSE=$(curl -s -X POST -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-              -H "Content-Type: application/json" \
-              "$DATABRICKS_HOST/api/2.0/sql/warehouses" \
-              -d "{
-                \"name\": \"${WAREHOUSE_NAME}\",
-                \"cluster_size\": \"2X-Small\",
-                \"enable_serverless_compute\": true,
-                \"auto_stop_mins\": 10,
-                \"max_num_clusters\": 1
-              }")
-            
-            echo "Create API Response: $(echo $RESPONSE | sed 's/\"token\":\"[^\"]*\"/\"token\":\"***\"/g')"
-            WAREHOUSE_ID=$(echo $RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin).get('id', ''))")
-          else
-            echo "Found existing warehouse with ID: $WAREHOUSE_ID"
-          fi
-          
-          if [ -z "$WAREHOUSE_ID" ]; then
-            echo "Error: Failed to get warehouse ID"
-            exit 1
-          fi
-          
-          echo "Using warehouse with ID: $WAREHOUSE_ID"
-          echo "WAREHOUSE_ID=$WAREHOUSE_ID" >> $GITHUB_ENV
-          # Set default environment to dev
-          echo "DEPLOY_ENV=dev" >> $GITHUB_ENV
 
       - name: Validate bundle
-        run: databricks bundle validate --var="environment=${{ env.DEPLOY_ENV }}"
+        if: steps.check.outputs.configured == 'true'
+        run: databricks bundle validate -t dev
 
-      - name: Deploy workflow
-        run: databricks bundle deploy --var="environment=${{ env.DEPLOY_ENV }}"        
+      - name: Deploy bundle (smoke test)
+        if: steps.check.outputs.configured == 'true'
+        run: databricks bundle deploy -t dev
 
-      - name: Run and monitor workflow
-        run: |
-          echo "Starting workflow execution..."
-          databricks bundle run demo_workflow --target dev --var="environment=${{ env.DEPLOY_ENV }}"
-
-      - name: Cleanup PR deployment
-        run: |
-          databricks bundle destroy --target dev --var="environment=${{ env.DEPLOY_ENV }}" || true
+      - name: Destroy bundle (cleanup)
+        if: always() && steps.check.outputs.configured == 'true'
+        run: databricks bundle destroy -t dev --auto-approve
