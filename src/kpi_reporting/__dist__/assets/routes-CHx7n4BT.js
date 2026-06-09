@@ -1,0 +1,1 @@
+import{i as e,n as t,t as n}from"./jsx-runtime-BF6S49EV.js";import{S as r}from"./index-Bvy48ORR.js";var i=e(t()),a=n();function o(){let e=r();return(0,i.useEffect)(()=>{e({to:`/kpi-submission`})},[e]),null}var s=()=>(0,a.jsx)(o,{});export{s as component};

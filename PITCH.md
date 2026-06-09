@@ -64,7 +64,7 @@ FastAPI Backend (Business Logic)
 
 1. **Clone the repo** — `git clone https://github.com/databricks-solutions/...`
 2. **Deploy locally** — `uv sync && bun install && uv run apx dev` (no Databricks resources needed for UI testing)
-3. **Deploy to Databricks** — Follow notebook 01 walkthrough: `databricks bundle deploy && notebooks/01_setup_lakebase.py`
+3. **Deploy to Databricks** — Clone as a Databricks Git folder and run the `notebooks/01_setup_lakebase.py` walkthrough (notebook 03 builds + deploys the App — no `bundle deploy` needed)
 4. **Customize** — Swap departments, KPIs, and publishing target for your organization
 
 ## Learn More

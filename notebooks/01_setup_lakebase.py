@@ -26,9 +26,10 @@
 # MAGIC   - Create Apps and attach resources
 # MAGIC - *(Optional, only if you want the publish-to-wiki feature)* a Confluence
 # MAGIC   Cloud space + an account that can mint API tokens
-# MAGIC - On your laptop, before running these notebooks: Databricks CLI configured
-# MAGIC   (`databricks auth login`) and `databricks bundle deploy` already run once
-# MAGIC   so the source code is in the workspace. (Local dev uses Python 3.11+,
+# MAGIC - The repo cloned into the workspace as a **Git folder**
+# MAGIC   (**Workspace → Create → Git folder**) — that's all you need to run these
+# MAGIC   notebooks; no laptop, CLI, or `databricks bundle deploy` required. (Local
+# MAGIC   dev and the optional Asset Bundle path use Python 3.11+,
 # MAGIC   [uv](https://docs.astral.sh/uv/), Node 20+, and Bun — see the README.)
 # MAGIC
 # MAGIC ## What this notebook does
@@ -632,7 +633,8 @@ displayHTML(f"""
 # MAGIC - Creating the Genie Space and adding the right tables / instructions
 # MAGIC - Generating a Confluence API token + storing it as a Databricks secret
 # MAGIC - Creating the App and attaching the Lakebase / Genie / secret resources
-# MAGIC - Running `databricks bundle deploy` + `databricks apps deploy` from your laptop
+# MAGIC - Building the app wheel on the cluster and deploying the App (no laptop,
+# MAGIC   no `databricks bundle deploy`)
 # MAGIC - Smoke-testing the running app
 # MAGIC
 # MAGIC A troubleshooting matrix is at the bottom of that notebook for the

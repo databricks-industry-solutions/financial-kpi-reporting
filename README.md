@@ -49,7 +49,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 | AI | Databricks Genie | Natural-language Q&A over the KPI data + governed metric view |
 | Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
 | Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
-| Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
+| Build/Deploy | APX (FastAPI + React scaffolder) | Deploys from a Databricks Git folder — notebook 03 builds + deploys the App (Asset Bundles optional) |
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 **Optional** (only if you want the publish-to-Confluence feature):
 - A Confluence Cloud space and an Atlassian account that can mint API tokens
 
-**On your laptop** (just for the initial `databricks bundle deploy`, and for local dev):
+**On your laptop** — *not required to deploy* (the Git-folder path below needs none of this). Only needed for local development or the optional Asset Bundle path, and for rebuilding the frontend after React changes:
 - [Databricks CLI](https://docs.databricks.com/dev-tools/cli/index.html) authenticated to your workspace (`databricks auth login`)
 - Python 3.11+, [uv](https://docs.astral.sh/uv/)
 - Node 20+, [Bun](https://bun.sh/) (only needed because `apx build` uses Bun for the React build)
@@ -108,37 +108,34 @@ KPI_REPORTING_FORCE_MOCK=true uv run apx dev
 
 ## Deploy on Databricks
 
-The install is two CLI commands plus a couple of UI clicks for things that don't have a public API yet:
+**The whole demo deploys from a [Databricks Git folder](https://docs.databricks.com/repos/index.html) — no laptop, no CLI, no `databricks bundle deploy`.** The compiled frontend is committed to the repo, and notebook 03 builds the app wheel on the cluster and deploys it for you.
 
-```bash
-# 1. From the repo root: build + push code, notebooks, and the wheel.
-#    This creates /Workspace/Users/<you>/financial-kpi-reporting/dev/...
-databricks bundle deploy
-```
-
-Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — under `/Workspace/Users/<you>/financial-kpi-reporting/dev/files/notebooks/`, a normal visible folder in your workspace home. That notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
+1. In the workspace: **Workspace → Create → Git folder**, and clone
+   `https://github.com/databricks-industry-solutions/financial-kpi-reporting.git`.
+2. Open **`notebooks/01_setup_lakebase.py`** — the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
 
 | Step | What | Where |
 |---|---|---|
 | 1 | Lakebase project + tables + seed | runs in notebook 01 |
 | 2 | Lakebase CDF activation (CDC → Delta) | notebook 02 + UI activation |
-| 3 | Genie Space, Confluence token (optional), App + resources, Apps deploy | notebook 03 (SDK + UI) |
+| 3 | Genie Space, Confluence token (optional), App + resources, **build + deploy the App** | notebook 03 (SDK + UI) |
 
 A troubleshooting matrix sits at the bottom of notebook 03 for the most common failure modes.
 
-> **Prefer a Git folder?** If running notebooks out of the bundle's deploy folder feels unnatural, you can instead clone this repo as a [Databricks Git folder](https://docs.databricks.com/repos/index.html) (**Workspace → Create → Git folder**) and run **notebooks 01 and 02** directly from there — they only need a configured workspace, not the built app. **But notebook 03's App-deploy step still requires `databricks bundle deploy`**: it deploys the App from the built `.build/` artifacts (wheel + bundled frontend), and `.build/` is a build output that is *not* committed to git (it's `.gitignore`d), so a Git-folder clone has it empty. In short: a Git folder is fine for reading/running the setup notebooks, but the `databricks bundle deploy` above is still the supported way to get the App's code into the workspace.
+> **Updating the app code**: notebook 03 Step 4 rebuilds the wheel from the repo on every run, so to ship **Python** changes just pull the Git folder and re-run it. For **frontend** changes, rebuild the compiled assets locally with `uv run apx build`, commit `src/kpi_reporting/__dist__`, pull the Git folder, and re-run Step 4.
 
-> **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App.
+<details>
+<summary><b>Prefer Databricks Asset Bundles?</b> (optional)</summary>
+
+If you'd rather manage the workspace files with [Databricks Asset Bundles](https://docs.databricks.com/dev-tools/bundles/index.html), run `databricks bundle deploy` from the repo root on your laptop (needs the laptop prerequisites above — CLI, uv, Node/Bun), then run the notebooks from `/Workspace/Users/<you>/financial-kpi-reporting/dev/files/notebooks/`. Notebook 03 Step 4 behaves identically either way — it builds and deploys the App from the committed source, so you do **not** need to re-run `databricks bundle deploy` after code changes.
+
+</details>
 
 ## Tearing down
 
-When you're done with the demo:
+When you're done with the demo, run **`notebooks/99_teardown.py`** (set the `confirm` widget to `yes`). It removes the Lakebase project, the App and its service principal, the synced UC schema, the secret scope, and — when you pass its ID via the `genie_space_id` widget — the Genie Space (via `w.genie.trash_space`).
 
-```bash
-databricks bundle destroy
-```
-
-…removes the bundle workspace files. To remove the Lakebase project, the App, the synced UC schema, and the secret scope, run **`notebooks/99_teardown.py`** (set the `confirm` widget to `yes`). The Genie Space has to be deleted via the workspace UI — there's no public API for that yet.
+If you used the optional Asset Bundle path, also run `databricks bundle destroy` from the repo root to remove the bundle's workspace files.
 
 ## Customizing for your organization
 

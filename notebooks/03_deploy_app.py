@@ -16,7 +16,7 @@
 # MAGIC | 2d. Store the token | As a Databricks secret | SDK cell below |
 # MAGIC | 3. Create the App + resources | Lakebase, Genie, secret | SDK cell below |
 # MAGIC | 3b. Grant App SP access | UC + Lakebase grants for the App's service principal | SDK cell below |
-# MAGIC | 4. Deploy the App | Generate app.yml + apps.deploy | SDK cell below |
+# MAGIC | 4. Build & deploy the App | Build wheel + app.yml + apps.deploy | SDK cell below |
 # MAGIC | 5. Smoke test | Verify the app works | Browser |
 
 # COMMAND ----------
@@ -486,13 +486,19 @@ print("\nGrants applied — the App SP can now read UC views and read/write Lake
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 4 — Deploy the App (SDK)
+# MAGIC ## Step 4 — Build & deploy the App (SDK)
 # MAGIC
-# MAGIC The cell below:
-# MAGIC 1. Generates an `app.yml` from the widget values
-# MAGIC 2. Uploads it into the workspace's `.build/` directory (overwriting the
-# MAGIC    bundle's `app.yml`)
-# MAGIC 3. Triggers an Apps deployment pointing at that `.build/` path
+# MAGIC No `databricks bundle deploy` and no local build needed — this cell does
+# MAGIC everything from the workspace:
+# MAGIC 1. **Builds the app wheel** from this repo. The build is pure-Python
+# MAGIC    (hatchling), so it runs right here on the cluster — it does **not** run
+# MAGIC    the React/bun build. The compiled frontend
+# MAGIC    (`src/kpi_reporting/__dist__`) is committed to the repo, and the wheel
+# MAGIC    just packages it.
+# MAGIC 2. Generates an `app.yml` from the widget values.
+# MAGIC 3. Assembles a `.build/` folder next to this notebook (wheel +
+# MAGIC    `requirements.txt` + `app.yml`).
+# MAGIC 4. Triggers an Apps deployment pointing at that `.build/` path.
 # MAGIC
 # MAGIC > **Why we write `app.yml` directly**: the Apps deployment API accepts
 # MAGIC > an `env_vars` field on `AppDeployment`, but in practice the Apps
@@ -509,13 +515,19 @@ print("\nGrants applied — the App SP can now read UC views and read/write Lake
 # MAGIC | `PGHOST` / `PGUSER` / `ENDPOINT_NAME` | auto-injected by the postgres resource |
 # MAGIC | `DATABRICKS_HOST` | auto-injected by the Apps runtime |
 # MAGIC
-# MAGIC > **Refreshing the source code**: When you change Python or React code,
-# MAGIC > run `databricks bundle deploy` from your laptop, then re-run this cell.
+# MAGIC > **Refreshing the source code**: if you change Python code, just re-run
+# MAGIC > this cell. If you change **React/frontend** code, rebuild the compiled
+# MAGIC > frontend locally with `uv run apx build` and commit
+# MAGIC > `src/kpi_reporting/__dist__`, then re-run this cell.
 
 # COMMAND ----------
 
-import base64
-import io
+import glob
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from databricks.sdk.service.apps import AppDeployment
 from databricks.sdk.service.workspace import ImportFormat
 
@@ -530,16 +542,45 @@ if ENABLE_CONFLUENCE:
     if missing:
         raise ValueError(f"Set these widgets before deploying: {missing}")
 
-# Derive the source path from the notebook's own path —
-# the bundle pushes everything (notebooks + .build/) under the same parent.
-# notebookPath() returns "/Users/..."; the Apps API needs "/Workspace/Users/...".
+# Derive paths from the notebook's own path. The repo (this Git folder / synced
+# files) and the .build/ we assemble live under the same parent.
+# notebookPath() returns "/Users/..."; FUSE + the Apps API need "/Workspace/Users/...".
 nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 files_root = nb_path.rsplit("/notebooks/", 1)[0]
 if not files_root.startswith("/Workspace/"):
     files_root = f"/Workspace{files_root}"
+repo_fuse = files_root            # repo root, readable on the driver via the /Workspace mount
 source_path = f"{files_root}/.build"
-app_yml_path = f"{source_path}/app.yml"
+print(f"Repo:   {repo_fuse}")
 print(f"Source: {source_path}")
+
+# --- Build the app wheel (pure Python — no Node/bun) -----------------------
+# Copy the repo to local disk and build with hatchling. This packages the
+# committed frontend (src/kpi_reporting/__dist__); it does NOT run the React
+# build, so no Node/bun is required on the cluster.
+build_src = tempfile.mkdtemp(prefix="kpi_build_")
+shutil.rmtree(build_src, ignore_errors=True)
+shutil.copytree(
+    repo_fuse, build_src,
+    ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", ".build", "dist", "__pycache__"),
+)
+if not os.path.exists(os.path.join(build_src, "src", "kpi_reporting", "__dist__", "index.html")):
+    raise FileNotFoundError(
+        "src/kpi_reporting/__dist__ is missing — the compiled frontend must be "
+        "committed to the repo. Run `uv run apx build` locally and commit it."
+    )
+subprocess.run(
+    [sys.executable, "-m", "pip", "install", "-q", "build", "hatchling", "uv-dynamic-versioning"],
+    check=True,
+)
+# --no-isolation: build with the deps we just installed (no PyPI round trip).
+subprocess.run(
+    [sys.executable, "-m", "build", "--wheel", "--no-isolation", build_src],
+    check=True,
+)
+wheel_path = sorted(glob.glob(os.path.join(build_src, "dist", "*.whl")))[-1]
+wheel_name = os.path.basename(wheel_path)
+print(f"Built wheel: {wheel_name}")
 
 # Build app.yml content from widget values.
 def _esc(s):
@@ -569,14 +610,25 @@ print(f"Confluence: {'enabled' if ENABLE_CONFLUENCE else 'disabled'}")
 print("\n--- generated app.yml ---")
 print(app_yml_content)
 
-# Upload to .build/app.yml — overwrites whatever the bundle deploy pushed.
+# --- Assemble .build/ in the workspace -------------------------------------
+# Upload the wheel (binary), a requirements.txt that references it, and the
+# generated app.yml. ImportFormat.AUTO stores the .whl as a workspace file.
+with open(wheel_path, "rb") as f:
+    wheel_bytes = f.read()
+w.workspace.mkdirs(source_path)
 w.workspace.upload(
-    path=app_yml_path,
-    content=app_yml_content.encode("utf-8"),
-    format=ImportFormat.AUTO,
-    overwrite=True,
+    path=f"{source_path}/{wheel_name}", content=wheel_bytes,
+    format=ImportFormat.AUTO, overwrite=True,
 )
-print(f"Wrote {app_yml_path}")
+w.workspace.upload(
+    path=f"{source_path}/requirements.txt", content=(wheel_name + "\n").encode("utf-8"),
+    format=ImportFormat.AUTO, overwrite=True,
+)
+w.workspace.upload(
+    path=f"{source_path}/app.yml", content=app_yml_content.encode("utf-8"),
+    format=ImportFormat.AUTO, overwrite=True,
+)
+print(f"Wrote {source_path}/  ({wheel_name}, requirements.txt, app.yml)")
 
 # Trigger app deploy. Env vars come from the app.yml we just uploaded.
 deployment = AppDeployment(source_code_path=source_path)
@@ -611,19 +663,21 @@ print(f"\nApp URL: {app_info.url}")
 # MAGIC |---|---|
 # MAGIC | App returns 500 on `/api/me` | Userbase doesn't include the logged-in email — add a row to `monthly_reporting_userbase` in notebook 01 |
 # MAGIC | App falls back to mock data | Lakebase resource not attached or `PGHOST`/`PGUSER` not injected — re-run Step 3 |
-# MAGIC | App boots but env vars look empty (e.g. `KPI_REPORTING_LAKEBASE_PROJECT=None`) | The most common cause is that you ran `databricks bundle deploy` from your laptop *after* notebook 03 — bundle deploy resets `.build/app.yml` to the bare local one. Re-run Step 4 to regenerate `app.yml` from your widgets and redeploy. |
-# MAGIC | `ModuleNotFoundError: No module named 'kpi_reporting'` after deploy | The local `apx build` produced a wheel with `src/kpi_reporting/...` paths instead of `kpi_reporting/...` at the root. Make sure `pyproject.toml` has `[tool.hatch.build.targets.wheel] packages = ["src/kpi_reporting"]` and rebuild. |
+# MAGIC | App boots but env vars look empty (e.g. `KPI_REPORTING_LAKEBASE_PROJECT=None`) | The `app.yml` Step 4 generated didn't reach the App — re-run Step 4 to regenerate `app.yml` from your widgets and redeploy. |
+# MAGIC | `ModuleNotFoundError: No module named 'kpi_reporting'` after deploy | The wheel was built with `src/kpi_reporting/...` paths instead of `kpi_reporting/...` at the root. Make sure `pyproject.toml` has `[tool.hatch.build.targets.wheel] packages = ["src/kpi_reporting"]`. |
+# MAGIC | `FileNotFoundError: src/kpi_reporting/__dist__ is missing` in Step 4 | The compiled frontend isn't committed. Run `uv run apx build` locally, commit `src/kpi_reporting/__dist__`, and pull the repo into the workspace. |
+# MAGIC | Step 4 build fails installing `build`/`hatchling` | The cluster has no internet egress to PyPI — use a cluster/serverless with PyPI access, or pre-install `build hatchling uv-dynamic-versioning`. |
 # MAGIC | Genie chat returns *Query ended with status: FAILED* | The App's service principal doesn't have `SELECT` on the synced Delta views — re-run Step 3b to apply UC grants. |
 # MAGIC | Submission edits don't show up in Lakebase | The App SP doesn't have `INSERT/UPDATE/DELETE` on the Lakebase tables — re-run Step 3b to apply Lakebase grants. |
 # MAGIC | Genie chat returns *Genie Space not configured* | `GENIE_SPACE_ID` not set — confirm the resource alias is `genie_space` (Step 3) |
 # MAGIC | Genie Space shows no data | Lakebase CDF not active or tables not added to the Space — see notebook 02 + Step 1 |
 # MAGIC | Publish-to-Confluence returns 401 | Wrong email/token — re-check Step 2 widgets + the secret stored in Step 2d |
 # MAGIC | Publish-to-Confluence returns 404 | Wrong space key or parent page ID — re-check Step 2b widgets |
-# MAGIC | `Source code path must be a valid workspace path` | Source path didn't get the `/Workspace/` prefix — your notebook may be older than the fix; re-run the bundle deploy and reload the notebook. |
-# MAGIC | `databricks bundle deploy` fails with "key expired" | HashiCorp's Terraform signing key has expired in the bundled CLI. Use a local install: `DATABRICKS_TF_EXEC_PATH=$(which terraform) DATABRICKS_TF_VERSION=$(terraform --version \| head -1 \| awk '{print $2}' \| tr -d v) databricks bundle deploy` |
+# MAGIC | `Source code path must be a valid workspace path` | The `.build/` path didn't get the `/Workspace/` prefix — make sure you're running this notebook from a workspace/Git folder, not a local checkout. |
 # MAGIC
-# MAGIC > **Operational note**: every `databricks bundle deploy` you run from your
-# MAGIC > laptop overwrites `.build/app.yml` in the workspace with the bare local
-# MAGIC > version (just the `command` line — no env vars). After any bundle
-# MAGIC > deploy you need to re-run **Step 4** of this notebook to regenerate
-# MAGIC > `app.yml` from your widget values and redeploy the App.
+# MAGIC > **How source code is packaged**: Step 4 builds the wheel on the cluster
+# MAGIC > from the committed source (including `src/kpi_reporting/__dist__`) and
+# MAGIC > assembles `.build/` in the workspace — no `databricks bundle deploy` and
+# MAGIC > no local build are involved. To ship Python changes, just re-run Step 4;
+# MAGIC > to ship frontend changes, rebuild `__dist__` locally with
+# MAGIC > `uv run apx build`, commit it, and re-run Step 4.
