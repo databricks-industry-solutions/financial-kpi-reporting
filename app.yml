@@ -1,0 +1,5 @@
+command: ["uvicorn", "kpi_reporting.backend.app:app", "--workers", "2"]
+
+# All environment variables are set at deploy time from notebook 03 via
+# the AppDeployment.env_vars field. See `notebooks/03_deploy_app.py`
+# Step 4 for the full list.

@@ -1,27 +1,32 @@
-# Databricks Asset Bundle files
-.databricks/
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-
 # Python
+.venv/
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 *.egg-info/
 dist/
 build/
 
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
+# APX / app build artifacts
+.apx/
+.build/
+.tanstack/
+.databricks/
+src/*/_metadata.py
+src/*/__dist__/
+src/*/ui/__dist__/
+src/*/ui/dist/
+src/*/ui/routeTree.gen.ts
+src/*/ui/types/routeTree.gen.ts
 
-# Environment files
+# Node
+node_modules/
+
+# Secrets
 .env
-.env.local 
+.env.local
+.env.*.local
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

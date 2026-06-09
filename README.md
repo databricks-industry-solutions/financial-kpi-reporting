@@ -1,38 +1,180 @@
-# Databricks Solution Accelerator Template - MODIFY THIS README.md
+# Financial KPI Reporting
 
-[![Databricks](https://img.shields.io/badge/Databricks-Solution_Accelerator-FF3621?style=for-the-badge&logo=databricks)](https://databricks.com)
-[![Unity Catalog](https://img.shields.io/badge/Unity_Catalog-Enabled-00A1C9?style=for-the-badge)](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
-[![Serverless](https://img.shields.io/badge/Serverless-Compute-00C851?style=for-the-badge)](https://docs.databricks.com/en/compute/serverless.html)
+A reference Databricks App for **governed monthly financial KPI reporting** across multiple business units or regions. Demonstrates an end-to-end pattern combining **Databricks Apps + Lakebase + Unity Catalog + Genie + (optionally) Confluence publishing** for a multi-unit enterprise.
 
-## Installation Guidelines
+> Built as a Field Engineering reference implementation. Synthetic data only — clone and customize for your own organization.
 
-1. Clone the project you'd like to run into your Databricks Workspace
+## What it does
 
-<img width="1726" height="677" alt="Screenshot 2025-07-23 at 11 05 25 AM" src="https://github.com/user-attachments/assets/55b1729f-ad07-420e-a271-843266abfb71" />
+Two personas, one app:
 
-2. Open the Asset Bundle Editor in the Databricks UI
+| Persona | What they do |
+|---|---|
+| **Regional Lead** (e.g. *Alex Morgan*) | Submits monthly KPI actuals + qualitative justifications, locks them once reviewed |
+| **CFO** (e.g. *Sam Carter*) | Views consolidated dashboard, drills into underperforming regions, asks ad-hoc questions through embedded Genie, *(optionally)* publishes the executive summary to Confluence |
 
-<img width="1120" height="665" alt="Screenshot 2025-07-23 at 11 06 12 AM" src="https://github.com/user-attachments/assets/d1f91256-eb8f-4456-8d88-c0a37b1bd4c5" />
+Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across 13 historical months and 2 in-progress months.
 
-3. Click on "Deploy"
+The Confluence publish-to-wiki feature is **off by default** — the app works without it. Flip the `enable_confluence` widget in notebook 03 to turn it on.
 
-<img width="1523" height="902" alt="Screenshot 2025-07-23 at 11 09 37 AM" src="https://github.com/user-attachments/assets/9564cbdd-c5c5-4210-bf27-2b19e6efc85b" />
+## Architecture
 
-4. Navigate to the Deployments tab in the Asset Bundle UI (🚀 icon) and click "Run" on the job available. This will run the notebooks from this project sequentially.
+```
+┌──────────────────────────────────────────────────────────────┐
+│  React (TanStack Router) frontend — submission + dashboard   │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ REST
+┌──────────────────────────────┴───────────────────────────────┐
+│  FastAPI backend (Databricks App)                            │
+└─────────┬──────────────────┬──────────────────┬──────────────┘
+          │                  │                  │
+┌─────────┴──────┐  ┌────────┴────────┐  ┌──────┴───────┐
+│ Lakebase       │  │ Genie Space     │  │ Confluence   │
+│ (Postgres)     │  │ (NL → SQL)      │  │ REST API     │
+└────────┬───────┘  └─────────────────┘  └──────────────┘
+         │ Lakehouse Sync (CDC)
+┌────────┴───────┐
+│ Unity Catalog  │
+│ Delta tables   │
+└────────────────┘
+```
 
-<img width="1527" height="880" alt="Screenshot 2025-07-23 at 11 10 13 AM" src="https://github.com/user-attachments/assets/0f612882-7123-449b-8349-1835bc59523c" />
+| Component | Tech | Purpose |
+|---|---|---|
+| Frontend | React 19, TanStack Router, Recharts, Tailwind | Submission UI + executive dashboard |
+| Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
+| Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
+| Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakehouse Sync |
+| AI | Databricks Genie | Natural-language Q&A over the KPI data |
+| Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
+| Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
+| Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
 
-## Contributing
+## Prerequisites
 
-1. **git clone** this project locally
-2. Utilize the Databricks CLI to test your changes against a Databricks workspace of your choice
-3. Contribute to repositories with pull requests (PRs), ensuring that you always have a second-party review from a capable teammate
+**Databricks workspace** must have:
+- **Apps**, **Lakebase**, and **Genie Spaces** enabled
+- Your account: permission to create Unity Catalog schemas and Lakebase projects, and to create Apps + attach resources
 
+**Optional** (only if you want the publish-to-Confluence feature):
+- A Confluence Cloud space and an Atlassian account that can mint API tokens
 
-## 📄 Third-Party Package Licenses - FILL IN WITH YOUR PROJECT'S OPEN SOURCE PACKAGES + LICENSING
+**On your laptop** (just for the initial `databricks bundle deploy`, and for local dev):
+- [Databricks CLI](https://docs.databricks.com/dev-tools/cli/index.html) authenticated to your workspace (`databricks auth login`)
+- Python 3.11+, [uv](https://docs.astral.sh/uv/)
+- Node 20+, [Bun](https://bun.sh/) (only needed because `apx build` uses Bun for the React build)
 
-&copy; 2025 Databricks, Inc. All rights reserved. The source in this project is provided subject to the Databricks License [https://databricks.com/db-license-source]. All included or referenced third party libraries are subject to the licenses set forth below.
+## Dependencies
 
-| Package | License | Copyright |
-|---------|---------|-----------|
-| | | |
+All dependencies are open-source with permissive licenses. See [NOTICE.md](NOTICE.md) for details.
+
+| Component | Libraries | License |
+|-----------|-----------|---------|
+| **Backend** | FastAPI, Pydantic, SQLAlchemy, psycopg, httpx | MIT, LGPL 3.0, BSD |
+| **Frontend** | React, TanStack Router, Recharts, Tailwind, Shadcn/ui | MIT, ISC |
+| **Platform SDK** | Databricks SDK | Apache 2.0 |
+| **Build Tools** | Hatchling, UV, Bun | MIT |
+| **App scaffolder** | APX | Databricks-internal (see NOTICE) |
+
+Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js)
+
+## Local development
+
+The app falls back to an in-memory mock when Lakebase isn't reachable, so you can run the full UI locally without any Databricks resources.
+
+```bash
+# Install Python deps
+uv sync
+
+# Install JS deps
+bun install
+
+# Copy the env template and fill in if you want to talk to a real Lakebase /
+# Genie / Confluence; leave blank for the in-memory mock
+cp .env.example .env
+
+# Run dev server (FastAPI + Vite, hot reload)
+uv run apx dev
+```
+
+Open [http://localhost:8000](http://localhost:8000). The mock layer (`src/kpi_reporting/backend/mock_data.py`) has the same shape as the Lakebase seed, so the UI behaves the same.
+
+To force the mock even when Lakebase env vars are set:
+
+```bash
+KPI_REPORTING_FORCE_MOCK=true uv run apx dev
+```
+
+## Deploy on Databricks
+
+The install is two CLI commands plus a couple of UI clicks for things that don't have a public API yet:
+
+```bash
+# 1. From the repo root: build + push code, notebooks, and the wheel.
+#    This creates /Workspace/Users/<you>/.bundle/financial-kpi-reporting/dev/...
+databricks bundle deploy
+```
+
+Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — that notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
+
+| Step | What | Where |
+|---|---|---|
+| 1 | Lakebase project + tables + seed | runs in notebook 01 |
+| 2 | Lakehouse Sync activation (CDC → Delta) | notebook 02 + UI activation |
+| 3 | Genie Space, Confluence token (optional), App + resources, Apps deploy | notebook 03 (SDK + UI) |
+
+A troubleshooting matrix sits at the bottom of notebook 03 for the most common failure modes.
+
+> **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App.
+
+## Tearing down
+
+When you're done with the demo:
+
+```bash
+databricks bundle destroy
+```
+
+…removes the bundle workspace files. To remove the Lakebase project, the App, the synced UC schema, and the secret scope, run **`notebooks/99_teardown.py`** (set the `confirm` widget to `yes`). The Genie Space has to be deleted via the workspace UI — there's no public API for that yet.
+
+## Customizing for your organization
+
+This is a reference implementation. Most adopters change at least:
+
+- **Departments / regions** — `DEPARTMENTS` in `notebooks/01_setup_lakebase.py` and `mock_data.py`
+- **KPI definitions** — `KPI_DEFINITIONS` in the same files. The schema accepts arbitrary KPI names per region; the UI is generic
+- **Userbase** — replace the synthetic emails with your workspace identities so SSO flows through to the right region
+- **Publishing target** — the Confluence client (`backend/confluence.py`) is a small, replaceable adapter. Swap it for SharePoint, email, or any docs system
+- **Access control** — today the backend trusts the userbase mapping for role assignment. For production, implement row-level security:
+  - Option A: SQL RLS in Lakebase queries (filter `kpi_submissions` by `department_id` matching the user's region)
+  - Option B: Unity Catalog fine-grained access control (UC FGA) on `departments` and `kpi_submissions` tables
+  - See [SECURITY.md](SECURITY.md) for details
+
+## Repo layout
+
+```
+financial-kpi-reporting/
+├── README.md, DESIGN.md
+├── pyproject.toml, package.json   # uv + bun configs
+├── app.yml                         # Databricks Apps runtime config
+├── databricks.yml                  # Asset Bundle definition
+├── notebooks/
+│   ├── 01_setup_lakebase.py        # Lakebase tables + seed data + canonical deploy guide
+│   ├── 02_setup_forward_etl.py     # Lakehouse Sync (CDC to Delta) + clean views for Genie
+│   ├── 03_deploy_app.py            # Genie Space + Confluence + App + grants + Apps deploy
+│   └── 99_teardown.py              # Reverses notebooks 01–03 (delete app, project, schema, scope)
+└── src/kpi_reporting/
+    ├── backend/                    # FastAPI app, Lakebase/Genie/Confluence clients, mock layer
+    └── ui/                         # React frontend (TanStack Router, Recharts, Tailwind)
+```
+
+## Maintainers
+
+Maintained by **Databricks Field Engineering**. Code ownership is enforced via [CODEOWNERS](.github/CODEOWNERS).
+
+- **Issues / PRs:** open in this repo
+- **Security disclosures:** see [SECURITY.md](SECURITY.md) — email `security@databricks.com`, do not open a public issue
+
+## License
+
+See [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md). [PUBLISHING.md](PUBLISHING.md) is the pre-publication compliance record.
