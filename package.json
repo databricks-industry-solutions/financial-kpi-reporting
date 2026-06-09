@@ -32,7 +32,7 @@
         "@opentelemetry/resources": "^2.7.1",
         "@opentelemetry/sdk-logs": "^0.216.0",
         "@tailwindcss/vite": "^4.2.4",
-        "@tanstack/react-router-devtools": "1.145.7",
+        "@tanstack/react-router-devtools": "1.167.0",
         "@tanstack/router-plugin": "^1.167.31",
         "@types/node": "25.0.3",
         "@types/react": "19.2.7",
