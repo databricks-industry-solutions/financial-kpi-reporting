@@ -14,9 +14,22 @@ artifacts:
   # Resources: postgres (Lakebase), genie_space
   #
   # Deploy: databricks bundle deploy && databricks apps deploy kpi-reporting \
-  #   --source-code-path /Workspace/Users/<your-user>/.bundle/financial-kpi-reporting/dev/files/.build
+  #   --source-code-path /Workspace/Users/<your-user>/financial-kpi-reporting/dev/files/.build
 
 targets:
   dev:
     mode: development
     default: true
+    workspace:
+      # Optionally pin the target workspace here, so deploys don't depend on which
+      # CLI auth profile happens to be active. Uncomment and set your workspace URL;
+      # `databricks bundle deploy` will then refuse to run against any other host.
+      # Leave it commented to let the CLI decide the workspace via
+      # `databricks auth login` / DATABRICKS_CONFIG_PROFILE / the default profile.
+      # host: https://<your-workspace>.cloud.databricks.com
+
+      # Deploy into a plainly visible folder under your workspace home instead
+      # of the default hidden ~/.bundle/<name>/<target>. `~` expands to
+      # /Workspace/Users/<your-email>, so this stays per-user (no collisions)
+      # while making the notebooks easy to find in the workspace file browser.
+      root_path: ~/financial-kpi-reporting/${bundle.target}

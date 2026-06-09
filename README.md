@@ -32,7 +32,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 │ Lakebase       │  │ Genie Space     │  │ Confluence   │
 │ (Postgres)     │  │ (NL → SQL)      │  │ REST API     │
 └────────┬───────┘  └─────────────────┘  └──────────────┘
-         │ Lakehouse Sync (CDC)
+         │ Lakebase CDF (CDC)
 ┌────────┴───────┐
 │ Unity Catalog  │
 │ Delta tables   │
@@ -44,8 +44,9 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 | Frontend | React 19, TanStack Router, Recharts, Tailwind | Submission UI + executive dashboard |
 | Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
 | Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
-| Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakehouse Sync |
-| AI | Databricks Genie | Natural-language Q&A over the KPI data |
+| Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakebase CDF (Change Data Feed, formerly "Lakehouse Sync") |
+| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) shared by Genie, AI/BI dashboards, and the app |
+| AI | Databricks Genie | Natural-language Q&A over the KPI data + governed metric view |
 | Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
 | Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
 | Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
@@ -111,19 +112,21 @@ The install is two CLI commands plus a couple of UI clicks for things that don't
 
 ```bash
 # 1. From the repo root: build + push code, notebooks, and the wheel.
-#    This creates /Workspace/Users/<you>/.bundle/financial-kpi-reporting/dev/...
+#    This creates /Workspace/Users/<you>/financial-kpi-reporting/dev/...
 databricks bundle deploy
 ```
 
-Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — that notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
+Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — under `/Workspace/Users/<you>/financial-kpi-reporting/dev/files/notebooks/`, a normal visible folder in your workspace home. That notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
 
 | Step | What | Where |
 |---|---|---|
 | 1 | Lakebase project + tables + seed | runs in notebook 01 |
-| 2 | Lakehouse Sync activation (CDC → Delta) | notebook 02 + UI activation |
+| 2 | Lakebase CDF activation (CDC → Delta) | notebook 02 + UI activation |
 | 3 | Genie Space, Confluence token (optional), App + resources, Apps deploy | notebook 03 (SDK + UI) |
 
 A troubleshooting matrix sits at the bottom of notebook 03 for the most common failure modes.
+
+> **Prefer a Git folder?** If running notebooks out of the bundle's deploy folder feels unnatural, you can instead clone this repo as a [Databricks Git folder](https://docs.databricks.com/repos/index.html) (**Workspace → Create → Git folder**) and run **notebooks 01 and 02** directly from there — they only need a configured workspace, not the built app. **But notebook 03's App-deploy step still requires `databricks bundle deploy`**: it deploys the App from the built `.build/` artifacts (wheel + bundled frontend), and `.build/` is a build output that is *not* committed to git (it's `.gitignore`d), so a Git-folder clone has it empty. In short: a Git folder is fine for reading/running the setup notebooks, but the `databricks bundle deploy` above is still the supported way to get the App's code into the workspace.
 
 > **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App.
 
@@ -160,7 +163,7 @@ financial-kpi-reporting/
 ├── databricks.yml                  # Asset Bundle definition
 ├── notebooks/
 │   ├── 01_setup_lakebase.py        # Lakebase tables + seed data + canonical deploy guide
-│   ├── 02_setup_forward_etl.py     # Lakehouse Sync (CDC to Delta) + clean views for Genie
+│   ├── 02_setup_forward_etl.py     # Lakebase CDF (CDC to Delta) + clean views for Genie
 │   ├── 03_deploy_app.py            # Genie Space + Confluence + App + grants + Apps deploy
 │   └── 99_teardown.py              # Reverses notebooks 01–03 (delete app, project, schema, scope)
 └── src/kpi_reporting/

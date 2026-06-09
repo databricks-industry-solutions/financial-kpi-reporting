@@ -10,10 +10,10 @@
 # MAGIC | # | Step | Where it happens | Required? |
 # MAGIC |---|------|------------------|-----------|
 # MAGIC | 1 | **Provision Lakebase + seed data** | this notebook | yes |
-# MAGIC | 2 | **Activate Lakehouse Sync** | `notebooks/02_setup_forward_etl.py` + UI | yes (creates the Delta tables Genie reads) |
+# MAGIC | 2 | **Activate Lakebase CDF** (Change Data Feed, formerly "Lakehouse Sync") | `notebooks/02_setup_forward_etl.py` + UI | yes (creates the Delta tables Genie reads) |
 # MAGIC | 3 | **Genie Space + Confluence + App deploy** | `notebooks/03_deploy_app.py` (guided checklist) | yes |
 # MAGIC
-# MAGIC > **Order matters**: Lakehouse Sync (notebook 02) must run before the Genie
+# MAGIC > **Order matters**: Lakebase CDF (notebook 02) must run before the Genie
 # MAGIC > Space step in notebook 03 — the workspace UI requires at least one table
 # MAGIC > to be selected when you create a Space, so the Delta tables need to exist first.
 # MAGIC
@@ -43,96 +43,158 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -U "psycopg[binary]>=3.0"
+# MAGIC %pip install -U "databricks-sdk>=0.74.0" "psycopg[binary]>=3.0"
 # MAGIC dbutils.library.restartPython()
+# MAGIC # databricks-sdk is upgraded because the Lakebase calls below use the
+# MAGIC # `w.postgres.*` service, which is newer than the SDK bundled in the
+# MAGIC # Databricks Runtime. `-U` pulls the latest, which has the postgres types
+# MAGIC # (Project, ProjectSpec, EndpointStatusState). restartPython() makes the
+# MAGIC # upgraded SDK take effect before the imports in the next cell.
 
 # COMMAND ----------
 
-import requests
 import time
 import uuid
 import random
-from datetime import datetime
 import psycopg
+
+from google.protobuf.duration_pb2 import Duration
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import NotFound
+from databricks.sdk.service.postgres import (
+    Project, ProjectSpec, ProjectDefaultEndpointSettings, EndpointStatusState,
+)
+
+# The Databricks SDK auto-authenticates inside a notebook — no manual API token
+# or REST headers needed. Every Lakebase call below goes through `w.postgres.*`.
+w = WorkspaceClient()
 
 # Create widgets — adjust their values via the toolbar at the top of the notebook
 dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project ID")
 dbutils.widgets.text("lakebase_display_name", "Financial KPI Reporting", "Lakebase display name")
+dbutils.widgets.text("suspend_after_minutes", "5", "Auto-suspend compute after N idle minutes (0 = never suspend)")
 
 # COMMAND ----------
 
 # Read widget values
 LAKEBASE_PROJECT_ID = dbutils.widgets.get("lakebase_project").strip()
 LAKEBASE_DISPLAY_NAME = dbutils.widgets.get("lakebase_display_name").strip()
+SUSPEND_AFTER_MINUTES = int(dbutils.widgets.get("suspend_after_minutes").strip() or "0")
 print(f"Project ID:   {LAKEBASE_PROJECT_ID}")
 print(f"Display name: {LAKEBASE_DISPLAY_NAME}")
+print(f"Auto-suspend: {f'after {SUSPEND_AFTER_MINUTES} min idle' if SUSPEND_AFTER_MINUTES else 'never (always on)'}")
 
 # COMMAND ----------
 
-# Get workspace URL and token for REST API
-ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-host = ctx.apiUrl().get()
-token = ctx.apiToken().get()
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Content-Type": "application/json"
-}
+# Lakebase addresses projects and endpoints by resource path; define them once
+# and reuse below. (No bearer token / headers — the SDK client handles auth.)
+PROJECT_NAME = f"projects/{LAKEBASE_PROJECT_ID}"
+ENDPOINT_NAME = f"{PROJECT_NAME}/branches/production/endpoints/primary"
 
-print(f"Workspace: {host}")
+print(f"Workspace:    {w.config.host}")
+print(f"Project path: {PROJECT_NAME}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Create or Get Lakebase Autoscale Project
+# MAGIC
+# MAGIC > ⏳ **The first run of the cell below takes a few minutes — typically ~2–4,
+# MAGIC > occasionally longer. This is expected; the cell is not stuck.** It is
+# MAGIC > provisioning a brand-new managed PostgreSQL database for you and waits
+# MAGIC > until it actually exists. The cell's running-timer (and the endpoint
+# MAGIC > state lines in the next cell) show it's progressing. Re-running the
+# MAGIC > notebook later is instant (the project already exists). See the comments
+# MAGIC > in the cell for exactly what's happening.
 
 # COMMAND ----------
 
-project_resp = requests.get(
-    f"{host}/api/2.0/postgres/projects/{LAKEBASE_PROJECT_ID}",
-    headers=headers
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS CELL DOES
+#   Creates (or reuses) the managed Lakebase Autoscale project that backs the
+#   app — a dedicated, Databricks-managed PostgreSQL 17 instance — using the
+#   typed SDK (`w.postgres.*`) rather than raw REST calls.
+#
+# WHY THE FIRST RUN TAKES A FEW MINUTES (this is normal — the cell is NOT frozen)
+#   create_project() returns almost instantly and the project NAME appears in
+#   the workspace UI right away — but that's only the control-plane *record*
+#   being registered. The actual PostgreSQL engine (compute + storage) is then
+#   provisioned in the background and is NOT connectable until that finishes
+#   (~2–4 min, sometimes longer). So "visible in the UI" ≠ "ready to use" — like
+#   a cloud VM that shows in the console before it has finished booting. We use
+#   the SDK's built-in waiter, op.wait(), which blocks (polling under the hood)
+#   until the operation reports done — raising if provisioning fails — then
+#   returns the ready Project so the seeding cells below can connect.
+#
+#   On RE-RUNS the project already exists, so we just fetch it and skip the wait
+#   entirely (finishes in under a second).
+# ─────────────────────────────────────────────────────────────────────────────
 
-if project_resp.status_code == 200:
+try:
+    # Idempotency check — makes re-runs instant.
+    project = w.postgres.get_project(name=PROJECT_NAME)
     print(f"Lakebase project already exists: {LAKEBASE_PROJECT_ID}")
-else:
-    create_resp = requests.post(
-        f"{host}/api/2.0/postgres/projects",
-        headers=headers,
-        params={"project_id": LAKEBASE_PROJECT_ID},
-        json={"spec": {"display_name": LAKEBASE_DISPLAY_NAME, "pg_version": "17"}}
-    )
-    if create_resp.status_code in (200, 201):
-        print(f"Created Lakebase project: {LAKEBASE_PROJECT_ID}")
-        op_name = create_resp.json().get("name", "")
-        if op_name:
-            for _ in range(120):
-                op_resp = requests.get(f"{host}/api/2.0/{op_name}", headers=headers)
-                if op_resp.status_code == 200 and op_resp.json().get("done", False):
-                    print("Project creation completed")
-                    break
-                time.sleep(10)
+except NotFound:
+    # Not found → start provisioning a new managed Postgres 17 instance. This
+    # returns immediately with a long-running operation; the DB isn't usable yet.
+    #
+    # default_endpoint_settings = the project's "Change default compute settings".
+    # Auto-suspend (scale the compute to zero) after SUSPEND_AFTER_MINUTES idle —
+    # this is what keeps a demo from billing while nobody's using it.
+    # NOTE: the API only accepts `no_suspension` when it is True (= never suspend);
+    # to ENABLE suspend you must set ONLY `suspend_timeout_duration` and leave
+    # `no_suspension` unset (passing no_suspension=False is rejected).
+    if SUSPEND_AFTER_MINUTES:
+        default_compute = ProjectDefaultEndpointSettings(
+            suspend_timeout_duration=Duration(seconds=SUSPEND_AFTER_MINUTES * 60),
+        )
     else:
-        raise Exception(f"Failed to create Lakebase project: {create_resp.text}")
+        default_compute = ProjectDefaultEndpointSettings(no_suspension=True)
+    op = w.postgres.create_project(
+        project=Project(spec=ProjectSpec(
+            display_name=LAKEBASE_DISPLAY_NAME,
+            pg_version="17",
+            default_endpoint_settings=default_compute,
+        )),
+        project_id=LAKEBASE_PROJECT_ID,
+    )
+    print(f"Created Lakebase project: {LAKEBASE_PROJECT_ID} — provisioning compute, usually ~2–4 min (this cell blocks until ready)...")
+
+    # Block until the long-running provisioning operation finishes. wait() polls
+    # under the hood, raises on failure, and returns the ready Project.
+    project = op.wait()
+    print("Project creation completed")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Wait for Compute Endpoint
+# MAGIC
+# MAGIC > ⏳ **This cell can pause for a minute or two on a brand-new project.**
+# MAGIC > We just need the Postgres compute endpoint to be in a connectable state.
+# MAGIC > Each line printed below is one poll of the current state.
 
 # COMMAND ----------
 
-endpoint_path = f"projects/{LAKEBASE_PROJECT_ID}/branches/production/endpoints/primary"
-
+# We need the primary endpoint to be connectable before the seeding cells open a
+# psycopg connection. Two states count as ready:
+#   ACTIVE — running.
+#   IDLE   — scaled to zero but healthy; Lakebase Autoscale auto-resumes it the
+#            instant we connect, so there's no point blocking on it (a re-run of
+#            this notebook usually finds the endpoint IDLE).
+# Only INIT means it's still coming up, so we poll (every 15s, up to 15 min) and
+# proceed as soon as the endpoint is ACTIVE or IDLE.
+READY_STATES = (EndpointStatusState.ACTIVE, EndpointStatusState.IDLE)
 for _ in range(60):
-    ep_resp = requests.get(f"{host}/api/2.0/postgres/{endpoint_path}", headers=headers)
-    if ep_resp.status_code == 200:
-        state = ep_resp.json().get("status", {}).get("current_state", "UNKNOWN")
-        print(f"Endpoint state: {state}")
-        if state == "ACTIVE":
-            break
+    endpoint = w.postgres.get_endpoint(name=ENDPOINT_NAME)
+    state = endpoint.status.current_state if endpoint.status else None
+    print(f"Endpoint state: {state}")
+    if state in READY_STATES:
+        break
     time.sleep(15)
 else:
-    print("Warning: Endpoint did not reach ACTIVE within 15 minutes, continuing anyway")
+    print("Warning: Endpoint did not reach a connectable state within 15 minutes, continuing anyway")
 
 # COMMAND ----------
 
@@ -141,18 +203,14 @@ else:
 
 # COMMAND ----------
 
-ep_resp = requests.get(f"{host}/api/2.0/postgres/{endpoint_path}", headers=headers)
-pg_host = ep_resp.json()["status"]["hosts"]["host"]
+# All via the SDK — no manual bearer token or REST plumbing.
+pg_host = w.postgres.get_endpoint(name=ENDPOINT_NAME).status.hosts.host
 
-cred_resp = requests.post(
-    f"{host}/api/2.0/postgres/credentials",
-    headers=headers,
-    json={"endpoint": endpoint_path}
-)
-pg_token = cred_resp.json()["token"]
+# Short-lived OAuth credential used as the Postgres password.
+pg_token = w.postgres.generate_database_credential(endpoint=ENDPOINT_NAME).token
 
-me_resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me", headers=headers)
-username = me_resp.json().get("userName", "unknown")
+# Connect as the current workspace identity.
+username = w.current_user.me().user_name
 
 print(f"Host: {pg_host}")
 print(f"User: {username}")
@@ -541,7 +599,7 @@ displayHTML(f"""
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 2 — Activate Lakehouse Sync
+# MAGIC ## Step 2 — Activate Lakebase CDF
 # MAGIC
 # MAGIC Open **`notebooks/02_setup_forward_etl.py`**. At the top, the notebook has
 # MAGIC widgets for **Target catalog** and **Target schema** — pick a catalog you
@@ -552,7 +610,7 @@ displayHTML(f"""
 # MAGIC
 # MAGIC 1. Sets `REPLICA IDENTITY FULL` on the source tables (required for CDC)
 # MAGIC 2. Creates the destination schema in your chosen catalog
-# MAGIC 3. Renders the exact values to plug into the Lakehouse Sync UI
+# MAGIC 3. Renders the exact values to plug into the Lakebase CDF UI
 # MAGIC 4. Verifies sync activation and creates clean views the Genie Space reads
 # MAGIC
 # MAGIC When notebook 02 finishes you'll have these tables in Unity Catalog
