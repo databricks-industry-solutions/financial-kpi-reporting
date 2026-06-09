@@ -133,7 +133,10 @@ class GenieAttachment(BaseModel):
 
 
 class GenieAskResponse(BaseModel):
-    conversation_id: str
-    message_id: str
+    # Optional because a FAILED/timed-out ask may have no conversation/message id
+    # (e.g. start_conversation never reached a created message). The frontend
+    # already handles status == "FAILED".
+    conversation_id: str | None = None
+    message_id: str | None = None
     status: str
     attachments: list[GenieAttachment] = []
