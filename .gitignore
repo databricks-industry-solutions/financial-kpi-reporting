@@ -12,10 +12,7 @@ build/
 .tanstack/
 .databricks/
 src/*/_metadata.py
-# NOTE: src/kpi_reporting/__dist__ (the compiled frontend) is intentionally
-# COMMITTED so the app deploys straight from the notebooks with no Node/bun
-# build in the workspace. Rebuild it with `uv run apx build` and commit the
-# result. Other build intermediates below stay ignored.
+src/*/__dist__/
 src/*/ui/__dist__/
 src/*/ui/dist/
 src/*/ui/routeTree.gen.ts
