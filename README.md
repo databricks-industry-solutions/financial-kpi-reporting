@@ -65,19 +65,54 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 - Python 3.11+, [uv](https://docs.astral.sh/uv/)
 - Node 20+, [Bun](https://bun.sh/) (only needed because `apx build` uses Bun for the React build)
 
-## Dependencies
+## Open-source dependencies
 
-All dependencies are open-source with permissive licenses. See [NOTICE.md](NOTICE.md) for details.
+The source in this repository is provided subject to the [Databricks License](LICENSE.md). All included or referenced third-party libraries are subject to the licenses set forth below. Most are permissively licensed (MIT / BSD / Apache-2.0 / ISC); the one copyleft dependency is **psycopg** (LGPL-3.0), used unmodified and dynamically linked at runtime (imported via SQLAlchemy).
 
-| Component | Libraries | License |
-|-----------|-----------|---------|
-| **Backend** | FastAPI, Pydantic, SQLAlchemy, psycopg, httpx | MIT, LGPL 3.0, BSD |
-| **Frontend** | React, TanStack Router, Recharts, Tailwind, Shadcn/ui | MIT, ISC |
-| **Platform SDK** | Databricks SDK | Apache 2.0 |
-| **Build Tools** | Hatchling, UV, Bun | MIT |
-| **App scaffolder** | APX | Databricks-internal (see NOTICE) |
+### Backend (Python)
 
-Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js)
+| library | description | license | source |
+|---------|-------------|---------|--------|
+| FastAPI | Backend API framework | MIT | https://github.com/fastapi/fastapi |
+| Pydantic Settings | Configuration / settings management | MIT | https://github.com/pydantic/pydantic-settings |
+| Uvicorn | ASGI application server | BSD-3-Clause | https://github.com/encode/uvicorn |
+| Databricks SDK for Python | Lakebase / Genie / workspace APIs | Apache-2.0 | https://github.com/databricks/databricks-sdk-py |
+| psycopg | PostgreSQL driver for Lakebase | **LGPL-3.0** | https://github.com/psycopg/psycopg |
+| SQLAlchemy | SQL toolkit / ORM | MIT | https://github.com/sqlalchemy/sqlalchemy |
+| HTTPX | HTTP client (Genie / Confluence) | BSD-3-Clause | https://github.com/encode/httpx |
+
+### Frontend (JavaScript / TypeScript)
+
+| library | description | license | source |
+|---------|-------------|---------|--------|
+| React / React DOM | UI library | MIT | https://github.com/facebook/react |
+| TanStack Router / Query / Table | Routing, data fetching, tables | MIT | https://github.com/TanStack |
+| Recharts | Charting | MIT | https://github.com/recharts/recharts |
+| Radix UI primitives (via shadcn/ui) | Accessible UI components | MIT | https://github.com/radix-ui/primitives |
+| lucide-react | Icon set | ISC | https://github.com/lucide-icons/lucide |
+| class-variance-authority | Component style variants | Apache-2.0 | https://github.com/joe-bell/cva |
+| clsx | className utility | MIT | https://github.com/lukeed/clsx |
+| Tailwind CSS | CSS framework | MIT | https://github.com/tailwindlabs/tailwindcss |
+| tailwind-merge | Tailwind class merging | MIT | https://github.com/dcastil/tailwind-merge |
+| sonner | Toast notifications | MIT | https://github.com/emilkowalski/sonner |
+| react-error-boundary | Error boundaries | MIT | https://github.com/bvaughn/react-error-boundary |
+| tw-animate-css | Tailwind animation utilities | MIT | https://github.com/Wombosvideo/tw-animate-css |
+
+> Build-time and developer tooling (Hatchling, uv, Vite, TypeScript) and the internal **APX** scaffolder are **not distributed** in the published application and are therefore not attributed here. Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js).
+
+## Environments & proxies
+
+This repo pins **public registries** (PyPI for Python, the public npm registry for the frontend) and installs from the committed lockfile — so it behaves the same whether you have no proxy, a corporate mirror, or a different one. Routing to a mirror is a **local** concern; nothing internal is committed.
+
+- **Install (index-agnostic):** `uv sync --frozen` installs the exact pinned versions from `uv.lock` using their public `files.pythonhosted.org` URLs + hashes. It does **not** re-resolve, so your index configuration is irrelevant — this is the reliable path on any network that can reach the public CDN.
+- **Behind a private mirror?** Point uv / npm at it **locally** (never commit it):
+  ```bash
+  export UV_DEFAULT_INDEX=https://<your-mirror>/simple    # Python (uv)
+  echo 'registry=https://<your-mirror>/' > .npmrc          # frontend (.npmrc is gitignored)
+  ```
+- **Re-locking** (`uv lock`) and a **clean `databricks bundle deploy` build** must *resolve* packages (Python build backend + npm), so run those from an environment with public PyPI / npm egress (or a fully-mirroring proxy) — not a network that can only reach a partial internal proxy.
+
+Before publishing or merging, run the public-safety guard: `bash scripts/check-public.sh`.
 
 ## Local development
 
@@ -180,4 +215,4 @@ Maintained by **Databricks Field Engineering**. Code ownership is enforced via [
 
 ## License
 
-See [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md). [PUBLISHING.md](PUBLISHING.md) is the pre-publication compliance record.
+See [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md).

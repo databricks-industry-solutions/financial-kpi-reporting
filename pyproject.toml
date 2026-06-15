@@ -47,6 +47,15 @@ fallback-version = "0.0.0"
 
 [tool.uv]
 
+# Resolve from public PyPI by default, so dependency resolution is identical for
+# everyone regardless of any private mirror in a contributor's *global* uv config.
+# Behind a mirror? Override locally (do NOT commit):
+#   export UV_DEFAULT_INDEX=https://<your-mirror>/simple
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
 [[tool.uv.index]]
 name = "apx-index"
 url = "https://databricks-solutions.github.io/apx/simple"
