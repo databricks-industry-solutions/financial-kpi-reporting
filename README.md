@@ -32,7 +32,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 │ Lakebase       │  │ Genie Space     │  │ Confluence   │
 │ (Postgres)     │  │ (NL → SQL)      │  │ REST API     │
 └────────┬───────┘  └─────────────────┘  └──────────────┘
-         │ Lakehouse Sync (CDC)
+         │ Lakebase CDF (CDC)
 ┌────────┴───────┐
 │ Unity Catalog  │
 │ Delta tables   │
@@ -44,8 +44,9 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 | Frontend | React 19, TanStack Router, Recharts, Tailwind | Submission UI + executive dashboard |
 | Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
 | Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
-| Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakehouse Sync |
-| AI | Databricks Genie | Natural-language Q&A over the KPI data |
+| Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakebase CDF (Change Data Feed, formerly "Lakehouse Sync") |
+| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) shared by Genie, AI/BI dashboards, and the app |
+| AI | Databricks Genie | Natural-language Q&A over the KPI data + governed metric view |
 | Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
 | Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
 | Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
@@ -64,19 +65,40 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 - Python 3.11+, [uv](https://docs.astral.sh/uv/)
 - Node 20+, [Bun](https://bun.sh/) (only needed because `apx build` uses Bun for the React build)
 
-## Dependencies
+## Open-source dependencies
 
-All dependencies are open-source with permissive licenses. See [NOTICE.md](NOTICE.md) for details.
+The source in this repository is provided subject to the [Databricks License](LICENSE.md). All included or referenced third-party libraries are subject to the licenses set forth below. Most are permissively licensed (MIT / BSD / Apache-2.0 / ISC); the one copyleft dependency is **psycopg** (LGPL-3.0), used unmodified and dynamically linked at runtime (imported via SQLAlchemy).
 
-| Component | Libraries | License |
-|-----------|-----------|---------|
-| **Backend** | FastAPI, Pydantic, SQLAlchemy, psycopg, httpx | MIT, LGPL 3.0, BSD |
-| **Frontend** | React, TanStack Router, Recharts, Tailwind, Shadcn/ui | MIT, ISC |
-| **Platform SDK** | Databricks SDK | Apache 2.0 |
-| **Build Tools** | Hatchling, UV, Bun | MIT |
-| **App scaffolder** | APX | Databricks-internal (see NOTICE) |
+### Backend (Python)
 
-Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js)
+| library | description | license | source |
+|---------|-------------|---------|--------|
+| FastAPI | Backend API framework | MIT | https://github.com/fastapi/fastapi |
+| Pydantic Settings | Configuration / settings management | MIT | https://github.com/pydantic/pydantic-settings |
+| Uvicorn | ASGI application server | BSD-3-Clause | https://github.com/encode/uvicorn |
+| Databricks SDK for Python | Lakebase / Genie / workspace APIs | Apache-2.0 | https://github.com/databricks/databricks-sdk-py |
+| psycopg | PostgreSQL driver for Lakebase | **LGPL-3.0** | https://github.com/psycopg/psycopg |
+| SQLAlchemy | SQL toolkit / ORM | MIT | https://github.com/sqlalchemy/sqlalchemy |
+| HTTPX | HTTP client (Genie / Confluence) | BSD-3-Clause | https://github.com/encode/httpx |
+
+### Frontend (JavaScript / TypeScript)
+
+| library | description | license | source |
+|---------|-------------|---------|--------|
+| React / React DOM | UI library | MIT | https://github.com/facebook/react |
+| TanStack Router / Query / Table | Routing, data fetching, tables | MIT | https://github.com/TanStack |
+| Recharts | Charting | MIT | https://github.com/recharts/recharts |
+| Radix UI primitives (via shadcn/ui) | Accessible UI components | MIT | https://github.com/radix-ui/primitives |
+| lucide-react | Icon set | ISC | https://github.com/lucide-icons/lucide |
+| class-variance-authority | Component style variants | Apache-2.0 | https://github.com/joe-bell/cva |
+| clsx | className utility | MIT | https://github.com/lukeed/clsx |
+| Tailwind CSS | CSS framework | MIT | https://github.com/tailwindlabs/tailwindcss |
+| tailwind-merge | Tailwind class merging | MIT | https://github.com/dcastil/tailwind-merge |
+| sonner | Toast notifications | MIT | https://github.com/emilkowalski/sonner |
+| react-error-boundary | Error boundaries | MIT | https://github.com/bvaughn/react-error-boundary |
+| tw-animate-css | Tailwind animation utilities | MIT | https://github.com/Wombosvideo/tw-animate-css |
+
+> Build-time and developer tooling (Hatchling, uv, Vite, TypeScript) and the internal **APX** scaffolder are **not distributed** in the published application and are therefore not attributed here. Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js).
 
 ## Local development
 
@@ -111,19 +133,21 @@ The install is two CLI commands plus a couple of UI clicks for things that don't
 
 ```bash
 # 1. From the repo root: build + push code, notebooks, and the wheel.
-#    This creates /Workspace/Users/<you>/.bundle/financial-kpi-reporting/dev/...
+#    This creates /Workspace/Users/<you>/financial-kpi-reporting/dev/...
 databricks bundle deploy
 ```
 
-Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — that notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
+Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — under `/Workspace/Users/<you>/financial-kpi-reporting/dev/files/notebooks/`, a normal visible folder in your workspace home. That notebook is the canonical deploy walkthrough. It's a guided checklist that runs Lakebase setup itself and points you at notebooks 02 and 03 for the rest:
 
 | Step | What | Where |
 |---|---|---|
 | 1 | Lakebase project + tables + seed | runs in notebook 01 |
-| 2 | Lakehouse Sync activation (CDC → Delta) | notebook 02 + UI activation |
+| 2 | Lakebase CDF activation (CDC → Delta) | notebook 02 + UI activation |
 | 3 | Genie Space, Confluence token (optional), App + resources, Apps deploy | notebook 03 (SDK + UI) |
 
 A troubleshooting matrix sits at the bottom of notebook 03 for the most common failure modes.
+
+> **Prefer a Git folder?** If running notebooks out of the bundle's deploy folder feels unnatural, you can instead clone this repo as a [Databricks Git folder](https://docs.databricks.com/repos/index.html) (**Workspace → Create → Git folder**) and run **notebooks 01 and 02** directly from there — they only need a configured workspace, not the built app. **But notebook 03's App-deploy step still requires `databricks bundle deploy`**: it deploys the App from the built `.build/` artifacts (wheel + bundled frontend), and `.build/` is a build output that is *not* committed to git (it's `.gitignore`d), so a Git-folder clone has it empty. In short: a Git folder is fine for reading/running the setup notebooks, but the `databricks bundle deploy` above is still the supported way to get the App's code into the workspace.
 
 > **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App.
 
@@ -160,7 +184,7 @@ financial-kpi-reporting/
 ├── databricks.yml                  # Asset Bundle definition
 ├── notebooks/
 │   ├── 01_setup_lakebase.py        # Lakebase tables + seed data + canonical deploy guide
-│   ├── 02_setup_forward_etl.py     # Lakehouse Sync (CDC to Delta) + clean views for Genie
+│   ├── 02_setup_forward_etl.py     # Lakebase CDF (CDC to Delta) + clean views for Genie
 │   ├── 03_deploy_app.py            # Genie Space + Confluence + App + grants + Apps deploy
 │   └── 99_teardown.py              # Reverses notebooks 01–03 (delete app, project, schema, scope)
 └── src/kpi_reporting/
@@ -177,4 +201,4 @@ Maintained by **Databricks Field Engineering**. Code ownership is enforced via [
 
 ## License
 
-See [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md). [PUBLISHING.md](PUBLISHING.md) is the pre-publication compliance record.
+See [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md).

@@ -1,6 +1,10 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Setup Lakehouse Sync (Forward ETL)
+# MAGIC # Setup Lakebase Change Data Feed (CDF) — Forward ETL
+# MAGIC
+# MAGIC > **Note:** this feature was previously called **Lakehouse Sync**. In the
+# MAGIC > current workspace UI it appears as **Lakebase Change Data Feed (CDF)**
+# MAGIC > (shortened to "Lakebase CDF" below).
 # MAGIC
 # MAGIC Configures CDC-based continuous replication from Lakebase PostgreSQL to Delta tables
 # MAGIC so new KPI submissions appear in the Genie Space automatically — no manual notebook
@@ -9,7 +13,7 @@
 # MAGIC **Steps:**
 # MAGIC 1. Set `REPLICA IDENTITY FULL` on source tables (required for CDC)
 # MAGIC 2. Create the destination Unity Catalog schema (idempotent)
-# MAGIC 3. One-time UI activation of Lakehouse Sync — instructions render with your
+# MAGIC 3. One-time UI activation of Lakebase CDF — instructions render with your
 # MAGIC    widget values
 # MAGIC 4. Verify sync status
 # MAGIC 5. Create clean views on top of CDC history tables for Genie
@@ -23,13 +27,19 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -U "psycopg[binary]>=3.0"
+# MAGIC %pip install -U "databricks-sdk>=0.74.0" "psycopg[binary]>=3.0"
 # MAGIC dbutils.library.restartPython()
+# MAGIC # databricks-sdk is upgraded so the `w.postgres.*` connection-info calls
+# MAGIC # below work — that service is newer than the SDK bundled in the runtime.
 
 # COMMAND ----------
 
-import requests
 import psycopg
+
+from databricks.sdk import WorkspaceClient
+
+# The SDK auto-authenticates inside a notebook — no manual API token / headers.
+w = WorkspaceClient()
 
 # Create widgets — adjust their values in the toolbar at the top of the
 # notebook, then run the next cell to read them.
@@ -44,7 +54,7 @@ CATALOG = dbutils.widgets.get("target_catalog").strip()
 SCHEMA = dbutils.widgets.get("target_schema").strip()
 LAKEBASE_PROJECT_ID = dbutils.widgets.get("lakebase_project").strip()
 
-# Lakehouse Sync writes the CDC history tables into the same destination,
+# Lakebase CDF writes the CDC history tables into the same destination,
 # so source-of-truth tables and history tables share catalog/schema.
 SYNC_CATALOG = CATALOG
 SYNC_SCHEMA = SCHEMA
@@ -57,29 +67,13 @@ print(f"Tables to sync:   {TABLES}")
 
 # COMMAND ----------
 
-# Workspace context
-ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-host = ctx.apiUrl().get()
-token = ctx.apiToken().get()
-headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+# Lakebase connection info — all via the SDK (no manual API token / REST headers).
+ENDPOINT_NAME = f"projects/{LAKEBASE_PROJECT_ID}/branches/production/endpoints/primary"
 
-# COMMAND ----------
-
-# Lakebase connection
-endpoint_path = f"projects/{LAKEBASE_PROJECT_ID}/branches/production/endpoints/primary"
-
-ep_resp = requests.get(f"{host}/api/2.0/postgres/{endpoint_path}", headers=headers)
-pg_host = ep_resp.json()["status"]["hosts"]["host"]
-
-cred_resp = requests.post(
-    f"{host}/api/2.0/postgres/credentials",
-    headers=headers,
-    json={"endpoint": endpoint_path}
-)
-pg_token = cred_resp.json()["token"]
-
-me_resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me", headers=headers)
-username = me_resp.json().get("userName", "unknown")
+pg_host = w.postgres.get_endpoint(name=ENDPOINT_NAME).status.hosts.host
+# Short-lived OAuth credential used as the Postgres password.
+pg_token = w.postgres.generate_database_credential(endpoint=ENDPOINT_NAME).token
+username = w.current_user.me().user_name
 
 conn_string = f"host={pg_host} dbname=databricks_postgres user={username} password={pg_token} sslmode=require"
 
@@ -90,7 +84,7 @@ print(f"Connected to Lakebase: {pg_host}")
 # MAGIC %md
 # MAGIC ## Step 1 — Set REPLICA IDENTITY FULL
 # MAGIC
-# MAGIC Lakehouse Sync uses CDC (Change Data Capture) via PostgreSQL logical
+# MAGIC Lakebase CDF uses CDC (Change Data Capture) via PostgreSQL logical
 # MAGIC replication. `REPLICA IDENTITY FULL` ensures UPDATE and DELETE events
 # MAGIC include the full row, which is required for correct replication.
 
@@ -110,7 +104,7 @@ print("\nAll tables configured for CDC.")
 # MAGIC %md
 # MAGIC ## Step 2 — Create destination schema
 # MAGIC
-# MAGIC Lakehouse Sync needs the destination schema to exist before activation.
+# MAGIC Lakebase CDF needs the destination schema to exist before activation.
 # MAGIC The catalog you picked in the widgets must already exist; this cell
 # MAGIC creates the schema underneath it if it isn't there yet.
 
@@ -132,9 +126,9 @@ print(f"Schema ready: {CATALOG}.{SCHEMA}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3 — Activate Lakehouse Sync (one-time UI step)
+# MAGIC ## Step 3 — Activate Lakebase CDF (one-time UI step)
 # MAGIC
-# MAGIC Lakehouse Sync does not yet have a REST API — activation must be done
+# MAGIC Lakebase CDF does not yet have a REST API — activation must be done
 # MAGIC through the workspace UI. The cell below renders the exact values to
 # MAGIC plug into the form based on your widget settings.
 
@@ -142,11 +136,11 @@ print(f"Schema ready: {CATALOG}.{SCHEMA}")
 
 displayHTML(f"""
 <div style="padding: 16px 20px; background: #fff8e1; border-left: 4px solid #f5a623; border-radius: 6px; font-family: -apple-system, system-ui, sans-serif;">
-  <h3 style="margin: 0 0 12px 0;">Activate Lakehouse Sync (UI)</h3>
+  <h3 style="margin: 0 0 12px 0;">Activate Lakebase CDF (UI)</h3>
   <ol style="line-height: 1.7;">
     <li>Open <strong>Lakebase</strong> in the workspace sidebar</li>
     <li>Select project <strong>{LAKEBASE_PROJECT_ID}</strong> → branch <strong>production</strong></li>
-    <li>Open the <strong>Branch overview</strong> → <strong>Lakehouse sync</strong> tab</li>
+    <li>Open the <strong>Branch overview</strong> → <strong>Lakebase Change Data Feed (CDF)</strong> tab <span style="color:#777;">(formerly labelled "Lakehouse sync")</span></li>
     <li>Click <strong>Start sync</strong></li>
     <li>Configure with these values:
       <table style="margin-top: 8px; border-collapse: collapse;">
@@ -159,7 +153,7 @@ displayHTML(f"""
     <li>Confirm and start the sync</li>
   </ol>
   <p style="margin: 12px 0 0 0; font-size: 13px; color: #555;">
-    Once activated, Lakehouse Sync will continuously replicate changes from
+    Once activated, Lakebase CDF will continuously replicate changes from
     PostgreSQL to Delta tables named <code>lb_&lt;table&gt;_history</code>
     in <code>{CATALOG}.{SCHEMA}</code>. Then re-run this notebook from Step 4
     to create the clean views Genie reads.
@@ -188,14 +182,14 @@ try:
             rows = cur.fetchall()
 
     if not rows:
-        print("No sync entries found. Has Lakehouse Sync been activated? (See Step 3)")
+        print("No sync entries found. Has Lakebase CDF been activated? (See Step 3)")
     else:
         sync_active = True
         for row in rows:
             print(dict(zip(col_names, row)))
 except Exception as e:
     if "wal2delta" in str(e).lower():
-        print("Lakehouse Sync has not been activated yet — wal2delta schema does not exist.")
+        print("Lakebase CDF has not been activated yet — wal2delta schema does not exist.")
         print("Complete the one-time UI activation in Step 3, then re-run this notebook.")
     else:
         raise
@@ -205,17 +199,17 @@ except Exception as e:
 # MAGIC %md
 # MAGIC ## Step 5 — Create clean views for Genie
 # MAGIC
-# MAGIC Lakehouse Sync creates `lb_<table>_history` tables with CDC columns
+# MAGIC Lakebase CDF creates `lb_<table>_history` tables with CDC columns
 # MAGIC (`_change_type`, `_timestamp`, `_lsn`, `_xid`). These views filter to the
 # MAGIC latest row state so the Genie Space can query them without reconfiguration.
 
 # COMMAND ----------
 
 if not sync_active:
-    print("Skipping view creation — Lakehouse Sync is not active yet.")
+    print("Skipping view creation — Lakebase CDF is not active yet.")
     print("Complete the one-time UI activation in Step 3, then re-run this notebook.")
 else:
-    # Lakehouse Sync adds these CDC metadata columns to every history table.
+    # Lakebase CDF adds these CDC metadata columns to every history table.
     # _pg_change_type values: 'insert', 'update_postimage', 'delete'
     # _sort_by is monotonically increasing — use it for ordering.
     CDC_COLUMNS = {"_pg_change_type", "_pg_lsn", "_pg_xid", "_sort_by", "_timestamp"}
@@ -265,12 +259,105 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 6 — Verification summary
+# MAGIC ## Step 6 — Governed KPI metric view (Unity Catalog)
+# MAGIC
+# MAGIC Define the KPIs once as a **Unity Catalog metric view** so Genie, AI/BI
+# MAGIC dashboards, and the app all share one governed definition. Ratios like
+# MAGIC *Lock Rate* and *Avg Achievement* re-aggregate correctly at any grouping —
+# MAGIC which a plain view can't do. A tiny `kpi_targets` reference table supplies
+# MAGIC per-KPI targets (mirroring notebook 01's KPI definitions) so *Achievement*
+# MAGIC is expressible; `higher_is_better` flips the ratio for "lower is better"
+# MAGIC KPIs (DSO, OPEX Ratio) so ~100% always means "on target".
+# MAGIC
+# MAGIC > Requires **DBR 17.2+** (metric-view YAML v1.1) — serverless is current. If
+# MAGIC > your compute can't run `CREATE VIEW … WITH METRICS` via Spark, run the same
+# MAGIC > statement on a SQL warehouse.
 
 # COMMAND ----------
 
 if not sync_active:
-    print("Skipping verification — Lakehouse Sync is not active yet.")
+    print("Skipping metric view — Lakebase CDF is not active yet (the kpi_submissions view must exist first).")
+else:
+    from pyspark.sql import Row
+
+    # Per-KPI targets — governed reference data for the analytical layer.
+    # (number, name, target_value, unit, higher_is_better) — mirrors notebook 01 KPI_DEFINITIONS.
+    KPI_TARGETS = [
+        (1, "Revenue Growth",   8.5,       "%",    True),
+        (2, "Operating Margin", 14.0,      "%",    True),
+        (3, "DSO",              52.0,      "days", False),
+        (4, "OPEX Ratio",       22.0,      "%",    False),
+        (5, "Free Cash Flow",   4200000.0, "USD",  True),
+    ]
+    spark.createDataFrame(
+        [Row(kpi_number=n, kpi_name=nm, target_value=tv, kpi_unit=u, higher_is_better=hb)
+         for (n, nm, tv, u, hb) in KPI_TARGETS]
+    ).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{CATALOG}.{SCHEMA}.kpi_targets")
+    print(f"Created reference table: {CATALOG}.{SCHEMA}.kpi_targets ({len(KPI_TARGETS)} rows)")
+
+    # Build the metric-view YAML line-by-line. YAML is whitespace-sensitive, so we
+    # keep each line's indentation explicit rather than relying on code indentation.
+    yaml_lines = [
+        "version: 1.1",
+        'comment: "Governed financial KPI metrics — shared by Genie, dashboards, and the app"',
+        f"source: {CATALOG}.{SCHEMA}.kpi_submissions",
+        "joins:",
+        "  - name: dept",
+        f"    source: {CATALOG}.{SCHEMA}.departments",
+        "    on: source.department_id = dept.id",
+        "  - name: tgt",
+        f"    source: {CATALOG}.{SCHEMA}.kpi_targets",
+        "    on: source.kpi_number = tgt.kpi_number",
+        "dimensions:",
+        "  - name: Region",
+        "    expr: department_name",
+        "  - name: Regional Lead",
+        "    expr: dept.lead_name",
+        "  - name: KPI",
+        "    expr: kpi_name",
+        "  - name: KPI Category",
+        "    expr: kpi_category",
+        "  - name: Reporting Month",
+        "    expr: period_start",
+        "  - name: Period",
+        "    expr: period",
+        "  - name: Status",
+        "    expr: CASE WHEN kpi_lockin THEN 'Locked' ELSE 'Pending' END",
+        "measures:",
+        "  - name: Submissions",
+        "    expr: COUNT(1)",
+        "  - name: Locked Submissions",
+        "    expr: COUNT_IF(kpi_lockin)",
+        "  - name: Lock Rate",
+        "    expr: COUNT_IF(kpi_lockin) / COUNT(1)",
+        "  - name: Reviewed Rate",
+        "    expr: COUNT_IF(reviewed_by_gm <> '') / COUNT(1)",
+        "  - name: Regions Reporting",
+        "    expr: COUNT(DISTINCT department_id)",
+        "  - name: Avg KPI Value",
+        "    expr: AVG(kpi_value)",
+        "  - name: Avg Achievement",
+        "    expr: AVG(CASE WHEN tgt.higher_is_better THEN kpi_value / NULLIF(tgt.target_value, 0) ELSE tgt.target_value / NULLIF(kpi_value, 0) END)",
+    ]
+    yaml_body = "\n".join(yaml_lines)
+    spark.sql(
+        f"CREATE OR REPLACE VIEW `{CATALOG}`.`{SCHEMA}`.kpi_metrics "
+        f"WITH METRICS LANGUAGE YAML AS $$\n{yaml_body}\n$$"
+    )
+    print(f"Created metric view: {CATALOG}.{SCHEMA}.kpi_metrics")
+    print("Query measures with MEASURE(), e.g.:")
+    print(f"  SELECT `Region`, MEASURE(`Avg Achievement`), MEASURE(`Lock Rate`)")
+    print(f"  FROM {CATALOG}.{SCHEMA}.kpi_metrics GROUP BY ALL ORDER BY ALL")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 7 — Verification summary
+
+# COMMAND ----------
+
+if not sync_active:
+    print("Skipping verification — Lakebase CDF is not active yet.")
     print("\nDone so far: Step 1 (REPLICA IDENTITY) and Step 2 (destination schema).")
     print("Next:")
     print("  1. Complete the one-time UI activation (Step 3 above)")
@@ -283,7 +370,7 @@ else:
         count = spark.table(view_name).count()
         print(f"{view_name:<60} {count}")
 
-    print(f"\nLakehouse Sync setup complete in {CATALOG}.{SCHEMA}")
-    print("Now create the Genie Space and select these tables:")
-    for table in ("departments", "kpi_submissions"):
+    print(f"\nLakebase CDF setup complete in {CATALOG}.{SCHEMA}")
+    print("Now run notebook 03 — its Genie Space points at the governed metric view + tables:")
+    for table in ("kpi_metrics", "departments", "kpi_submissions"):
         print(f"  - {CATALOG}.{SCHEMA}.{table}")

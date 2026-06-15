@@ -30,3 +30,8 @@ node_modules/
 .vscode/
 .idea/
 .DS_Store
+
+# Internal review / compliance artifacts — do not publish externally
+PUBLISHING.md
+DEMO_AUDIT.md
+DEMO_MODERNIZATION.md

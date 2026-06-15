@@ -2,17 +2,16 @@
 # MAGIC %md
 # MAGIC # Deploy Guide — Genie Space + App
 # MAGIC
-# MAGIC Final step of the deploy. Walks through the parts that have an SDK/API
-# MAGIC (creating secrets, creating the app, attaching resources) and the parts
-# MAGIC that don't (Genie Space creation is UI-only as of today).
+# MAGIC Final step of the deploy. Each part runs through the SDK/API — creating the
+# MAGIC Genie Space, minting/storing secrets, creating the app, and attaching resources.
 # MAGIC
 # MAGIC **Prerequisites — finish these first:**
 # MAGIC - Notebook **`01_setup_lakebase.py`** (Lakebase project + tables seeded)
-# MAGIC - Notebook **`02_setup_forward_etl.py`** (Lakehouse Sync running, Delta views in place)
+# MAGIC - Notebook **`02_setup_forward_etl.py`** (Lakebase CDF — Change Data Feed, formerly "Lakehouse Sync" — running, Delta views in place)
 # MAGIC
 # MAGIC | Step | What happens | How |
 # MAGIC |---|---|---|
-# MAGIC | 1. Create Genie Space | Pick the Delta tables it should query | Workspace UI (no public API yet) |
+# MAGIC | 1. Create Genie Space | Over the Delta views, with KPI instructions | `w.genie.create_space` (SDK cell below) |
 # MAGIC | 2. Confluence API token | Mint a token + find URL parts | Atlassian UI |
 # MAGIC | 2d. Store the token | As a Databricks secret | SDK cell below |
 # MAGIC | 3. Create the App + resources | Lakebase, Genie, secret | SDK cell below |
@@ -39,8 +38,9 @@
 # Create widgets — adjust their values via the toolbar at the top of the notebook
 dbutils.widgets.text("app_name", "kpi-reporting", "App name")
 dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project")
-dbutils.widgets.text("genie_space_id", "", "Genie Space ID (from Step 1)")
-# Catalog and schema where Lakehouse Sync wrote the Delta views — must match
+dbutils.widgets.text("genie_space_id", "", "Genie Space ID (blank = auto-create in Step 1)")
+dbutils.widgets.text("genie_warehouse_id", "", "SQL warehouse ID for the Genie Space (Step 1)")
+# Catalog and schema where Lakebase CDF wrote the Delta views — must match
 # whatever you picked in notebook 02's widgets.
 dbutils.widgets.text("target_catalog", "main", "Target catalog (from notebook 02)")
 dbutils.widgets.text("target_schema", "kpi_reporting", "Target schema (from notebook 02)")
@@ -62,6 +62,7 @@ dbutils.widgets.text("confluence_parent_page_id", "", "Confluence parent page ID
 APP_NAME = dbutils.widgets.get("app_name").strip()
 LAKEBASE_PROJECT = dbutils.widgets.get("lakebase_project").strip()
 GENIE_SPACE_ID = dbutils.widgets.get("genie_space_id").strip()
+GENIE_WAREHOUSE_ID = dbutils.widgets.get("genie_warehouse_id").strip()
 TARGET_CATALOG = dbutils.widgets.get("target_catalog").strip()
 TARGET_SCHEMA = dbutils.widgets.get("target_schema").strip()
 ENABLE_CONFLUENCE = dbutils.widgets.get("enable_confluence") == "yes"
@@ -76,7 +77,7 @@ CONFLUENCE_PARENT_PAGE_ID = dbutils.widgets.get("confluence_parent_page_id").str
 print(f"App name:         {APP_NAME}")
 print(f"Lakebase project: {LAKEBASE_PROJECT}")
 print(f"Delta target:     {TARGET_CATALOG}.{TARGET_SCHEMA}")
-print(f"Genie Space ID:   {GENIE_SPACE_ID or '(not set yet — fill widget after Step 1)'}")
+print(f"Genie Space ID:   {GENIE_SPACE_ID or '(blank — Step 1 will create the Space)'}")
 print(f"Confluence:       {'enabled' if ENABLE_CONFLUENCE else 'disabled (publish-to-wiki feature off)'}")
 if ENABLE_CONFLUENCE:
     print(f"Secret:           {SECRET_SCOPE}/{SECRET_KEY}")
@@ -89,42 +90,108 @@ if ENABLE_CONFLUENCE:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 1 — Create the Genie Space (Workspace UI)
+# MAGIC ## Step 1 — Create the Genie Space (automated via API)
 # MAGIC
 # MAGIC The Genie Space gives the CFO persona natural-language Q&A over the KPI data.
-# MAGIC There is no public REST API for Space creation today — these are one-time UI clicks.
-# MAGIC Make sure notebook 02 finished first so the Delta tables exist.
+# MAGIC Genie now has a public API (`w.genie.create_space`), so the cell below creates
+# MAGIC the Space for you — no manual UI clicks.
+# MAGIC
+# MAGIC **Before running:**
+# MAGIC - Notebook 02 must have finished — the Delta views must exist, since
+# MAGIC   `create_space` references them.
+# MAGIC - Set the **`genie_warehouse_id`** widget to a SQL warehouse ID (Genie runs its
+# MAGIC   generated SQL on a warehouse; find one under **SQL Warehouses** in the UI).
+# MAGIC - Leave **`genie_space_id`** blank to create a new Space; if it's already set,
+# MAGIC   creation is skipped and the existing Space is reused.
+# MAGIC
+# MAGIC A manual UI fallback (if you'd rather click through it, or the API isn't enabled
+# MAGIC in your workspace) is in the appendix cell just below.
+
+# COMMAND ----------
+
+import json
+import uuid
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
+
+# Tables the Space queries (created by notebook 02). monthly_reporting_userbase
+# is intentionally left out — it's only used by the app for SSO mapping and isn't
+# useful for AI Q&A.
+GENIE_TABLES = [
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_metrics",       # governed metric view (notebook 02) — measures like Avg Achievement, Lock Rate
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.departments",
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_submissions",   # row-level detail for drill-down questions
+]
+
+# System instructions that help Genie analyse the KPI data accurately. Edit freely;
+# this becomes one instruction block in the Space's Settings → Instructions.
+GENIE_INSTRUCTIONS = [
+    "You are a financial analyst assistant specializing in multi-region KPI ",
+    "performance analysis. Help executives understand KPI trends, regional ",
+    "performance, and the key drivers behind results.\n\n",
+    "Data model:\n",
+    "- Each row in `kpi_submissions` is one KPI (e.g. Revenue Growth, Operating ",
+    "Margin) for one region and one reporting period.\n",
+    "- `kpi_value` is the actual reported number; its unit is in `kpi_unit`.\n",
+    "- `kpi_lockin = TRUE` means the regional lead locked and formally submitted the data.\n",
+    "- `key_drivers_quantitative` / `key_drivers_qualitative` explain WHY the KPI landed where it did.\n",
+    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n",
+    "- `kpi_metrics` is a governed Unity Catalog metric view — prefer it for aggregate ",
+    "questions. Query its measures (Submissions, Lock Rate, Reviewed Rate, Regions ",
+    "Reporting, Avg KPI Value, Avg Achievement) grouped by its dimensions (Region, KPI, ",
+    "KPI Category, Reporting Month, Status). `Avg Achievement` already accounts for KPI ",
+    "direction (for DSO and OPEX Ratio, lower actuals are better), so ~1.0 means on target.\n\n",
+    "Analysis guidance:\n",
+    "- Focus on trends across months, regional comparisons, and achievement rates.\n",
+    "- Highlight under- and over-performers, and use the key_drivers columns to ",
+    "explain outliers rather than just reporting numbers.",
+]
+
+if GENIE_SPACE_ID:
+    print(f"genie_space_id already set ({GENIE_SPACE_ID}) — skipping creation, reusing it.")
+else:
+    if not GENIE_WAREHOUSE_ID:
+        raise ValueError(
+            "Set the `genie_warehouse_id` widget to a SQL warehouse ID, then re-run. "
+            "(Genie runs its generated SQL on a warehouse.)"
+        )
+    # serialized_space is the Space definition as a JSON string (schema v2:
+    # data_sources + instructions). create_space takes this plus a warehouse.
+    serialized_space = json.dumps({
+        "version": 2,
+        # create_space requires data_sources.tables sorted by identifier.
+        "data_sources": {"tables": [{"identifier": t} for t in sorted(GENIE_TABLES)]},
+        "instructions": {"text_instructions": [{"id": uuid.uuid4().hex, "content": GENIE_INSTRUCTIONS}]},
+    })
+    space = w.genie.create_space(
+        warehouse_id=GENIE_WAREHOUSE_ID,
+        serialized_space=serialized_space,
+        title="Financial KPI Reporting",
+        description="Natural-language Q&A over multi-region financial KPI submissions.",
+    )
+    GENIE_SPACE_ID = space.space_id
+    print(f"Created Genie Space: {GENIE_SPACE_ID}")
+    print(f"Open it: {w.config.host}/genie/rooms/{GENIE_SPACE_ID}")
+    print("Tip: paste this ID into the `genie_space_id` widget so future re-runs skip creation.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 1 (manual fallback) — create the Genie Space in the UI
+# MAGIC
+# MAGIC Only needed if you skipped the automated cell above. Otherwise continue to Step 2.
 # MAGIC
 # MAGIC 1. In the workspace sidebar open **Genie** → **New**
-# MAGIC 2. Name it `Financial KPI Reporting` (or whatever you like)
-# MAGIC 3. **Add tables** — required at creation time. Select these from the
-# MAGIC    catalog and schema you chose in notebook 02:
+# MAGIC 2. Name it `Financial KPI Reporting`
+# MAGIC 3. **Add tables** from the catalog/schema you chose in notebook 02:
 # MAGIC    - `<catalog>.<schema>.departments`
 # MAGIC    - `<catalog>.<schema>.kpi_submissions`
-# MAGIC    (You can leave `monthly_reporting_userbase` out — it's only used by the
-# MAGIC    app for SSO mapping and isn't useful for AI Q&A.)
-# MAGIC 4. Once created, open **Settings** → **Instructions** and add these system instructions
-# MAGIC    to help Genie give more accurate KPI analysis:
-# MAGIC
-# MAGIC    **System Prompt:**
-# MAGIC    - *"You are a financial analyst assistant specializing in multi-region KPI performance analysis. Your role is to help executives understand KPI trends, regional performance, and key drivers behind results."*
-# MAGIC
-# MAGIC    **Data Model:**
-# MAGIC    - *"Each row in `kpi_submissions` is one KPI (e.g., Revenue Growth, Operating Margin) for one region and one reporting period."*
-# MAGIC    - *"`kpi_value` contains the actual reported number. The unit is in `kpi_unit` (e.g., % or $M)."*
-# MAGIC    - *"`kpi_target` is the goal for that KPI; `achievement` is the percentage of target met."*
-# MAGIC    - *"`kpi_lockin = TRUE` means the regional lead has locked and formally submitted the data."*
-# MAGIC    - *"`key_drivers_quantitative` and `key_drivers_qualitative` explain WHY the KPI landed where it did."*
-# MAGIC    - *"`departments` joins to `kpi_submissions` on `department_id` to provide region names."*
-# MAGIC
-# MAGIC    **Analysis Guidance:**
-# MAGIC    - *"Focus on trends across months, regional comparisons, and achievement rates."*
-# MAGIC    - *"When comparing regions, account for different business units and reporting periods."*
-# MAGIC    - *"Highlight underperformers (achievement < 80%) and strong performers (achievement > 110%)."*
-# MAGIC    - *"Use the key_drivers columns to explain outliers, not just report numbers."*
-# MAGIC 5. **Copy the Space ID** — it's the path segment after `/genie/rooms/` in the URL.
-# MAGIC    Paste it into the `genie_space_id` widget at the top of this notebook,
-# MAGIC    then re-run the "Read widgets" cell.
+# MAGIC    (Leave `monthly_reporting_userbase` out — SSO mapping only, not useful for Q&A.)
+# MAGIC 4. Open **Settings → Instructions** and paste the guidance from the
+# MAGIC    `GENIE_INSTRUCTIONS` list in the cell above.
+# MAGIC 5. **Copy the Space ID** (the path segment after `/genie/rooms/` in the URL)
+# MAGIC    into the `genie_space_id` widget, then re-run the "Read widgets" cell.
 
 # COMMAND ----------
 
@@ -338,7 +405,6 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors.platform import ResourceAlreadyExists
 
 import psycopg
-import requests
 from databricks.sdk.service.catalog import PermissionsChange, Privilege
 
 w = WorkspaceClient()
@@ -352,7 +418,15 @@ if not sp_client_id:
     )
 print(f"App SP: {sp_client_id}")
 
-UC_TABLES = ("departments", "kpi_submissions", "monthly_reporting_userbase")
+# Lakebase Postgres tables — these live in the `public` schema of the Lakebase DB
+# (created/seeded by notebook 01). Used for the Lakebase GRANTs further below.
+LAKEBASE_TABLES = ("departments", "kpi_submissions", "monthly_reporting_userbase")
+# Unity Catalog objects the app/Genie read = the synced views PLUS kpi_targets and the
+# kpi_metrics metric view (notebook 02). Genie needs SELECT on the metric view AND its
+# source tables or queries fail with PERMISSION_DENIED. NOTE: kpi_targets/kpi_metrics
+# are UC-only (they do NOT exist in Lakebase Postgres), so they're excluded from the
+# Lakebase grants.
+UC_TABLES = LAKEBASE_TABLES + ("kpi_targets", "kpi_metrics")
 
 # --- Unity Catalog grants (so Genie can read the synced Delta views) ---
 print(f"\nGranting Unity Catalog access on {TARGET_CATALOG}.{TARGET_SCHEMA}...")
@@ -384,18 +458,10 @@ endpoint_path = f"projects/{LAKEBASE_PROJECT}/branches/production/endpoints/prim
 ep = w.postgres.get_endpoint(name=endpoint_path)
 pg_host = ep.status.hosts.host
 
-ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-api_token = ctx.apiToken().get()
-api_url = ctx.apiUrl().get()
-cred_resp = requests.post(
-    f"{api_url}/api/2.0/postgres/credentials",
-    headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
-    json={"endpoint": endpoint_path},
-)
-pg_token = cred_resp.json()["token"]
-me_resp = requests.get(f"{api_url}/api/2.0/preview/scim/v2/Me",
-                       headers={"Authorization": f"Bearer {api_token}"})
-pg_user = me_resp.json().get("userName", "unknown")
+# Short-lived OAuth credential (used as the Postgres password) + current user,
+# via the SDK — consistent with the get_endpoint call above (no raw REST / token).
+pg_token = w.postgres.generate_database_credential(endpoint=endpoint_path).token
+pg_user = w.current_user.me().user_name
 
 conn_string = (
     f"host={pg_host} dbname=databricks_postgres user={pg_user} "
@@ -405,7 +471,7 @@ with psycopg.connect(conn_string) as conn:
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(f'GRANT USAGE ON SCHEMA public TO "{sp_client_id}"')
-        for tbl in UC_TABLES:
+        for tbl in LAKEBASE_TABLES:
             cur.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON public.{tbl} TO "{sp_client_id}"')
             print(f"  SELECT/INSERT/UPDATE/DELETE on public.{tbl}")
         # Make future tables auto-grant the same DML so re-running notebook 01
@@ -550,7 +616,7 @@ print(f"\nApp URL: {app_info.url}")
 # MAGIC | Genie chat returns *Query ended with status: FAILED* | The App's service principal doesn't have `SELECT` on the synced Delta views — re-run Step 3b to apply UC grants. |
 # MAGIC | Submission edits don't show up in Lakebase | The App SP doesn't have `INSERT/UPDATE/DELETE` on the Lakebase tables — re-run Step 3b to apply Lakebase grants. |
 # MAGIC | Genie chat returns *Genie Space not configured* | `GENIE_SPACE_ID` not set — confirm the resource alias is `genie_space` (Step 3) |
-# MAGIC | Genie Space shows no data | Lakehouse Sync not active or tables not added to the Space — see notebook 02 + Step 1 |
+# MAGIC | Genie Space shows no data | Lakebase CDF not active or tables not added to the Space — see notebook 02 + Step 1 |
 # MAGIC | Publish-to-Confluence returns 401 | Wrong email/token — re-check Step 2 widgets + the secret stored in Step 2d |
 # MAGIC | Publish-to-Confluence returns 404 | Wrong space key or parent page ID — re-check Step 2b widgets |
 # MAGIC | `Source code path must be a valid workspace path` | Source path didn't get the `/Workspace/` prefix — your notebook may be older than the fix; re-run the bundle deploy and reload the notebook. |

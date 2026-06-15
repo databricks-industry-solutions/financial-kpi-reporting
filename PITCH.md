@@ -35,7 +35,7 @@ FastAPI Backend (Business Logic)
     ├─ Lakebase (PostgreSQL) — Transactional submissions
     ├─ Genie Space — AI-powered Q&A
     ├─ Confluence (optional) — Publishing
-    └─ Unity Catalog — Analytical views (Lakehouse Sync)
+    └─ Unity Catalog — Analytical views (Lakebase CDF)
 ```
 
 **Tech Stack:**
@@ -49,7 +49,7 @@ FastAPI Backend (Business Logic)
 
 ✓ **End-to-end pattern** — Shows how Apps, Lakebase, Genie, and UC work together  
 ✓ **Production-ready foundation** — Security, access control, and customization guidance  
-✓ **Guided deployment** — Notebooks walk through Lakebase setup, Lakehouse Sync, and Apps deployment  
+✓ **Guided deployment** — Notebooks walk through Lakebase setup, Lakebase CDF, and Apps deployment  
 ✓ **Local dev support** — Full UI testing without Databricks resources via in-memory mock  
 ✓ **Multi-persona UX** — Demonstrates role-based workflows in a real business context  
 
@@ -57,7 +57,7 @@ FastAPI Backend (Business Logic)
 
 - **Financial planning** — Replace spreadsheet-based regional reporting with a web app
 - **Sales/ops reviews** — Dashboard drill-downs into underperforming regions
-- **Compliance & audit** — Formal publishing trail in Confluence + Lakehouse Sync CDC
+- **Compliance & audit** — Formal publishing trail in Confluence + Lakebase CDF
 - **Scaling governance** — Template for other reporting workflows (budgets, forecasts, headcount)
 
 ## Getting Started
@@ -71,7 +71,7 @@ FastAPI Backend (Business Logic)
 
 - **README:** Full architecture, deployment guide, and customization patterns
 - **DESIGN.md:** Data model, personas, and integration points
-- **Notebooks:** Step-by-step deployment walkthrough (01 Lakebase → 02 Lakehouse Sync → 03 Apps deploy)
+- **Notebooks:** Step-by-step deployment walkthrough (01 Lakebase → 02 Lakebase CDF → 03 Apps deploy)
 - **GitHub:** [Link to repository]
 
 ---
