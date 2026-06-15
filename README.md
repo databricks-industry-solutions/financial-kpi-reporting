@@ -100,6 +100,20 @@ The source in this repository is provided subject to the [Databricks License](LI
 
 > Build-time and developer tooling (Hatchling, uv, Vite, TypeScript) and the internal **APX** scaffolder are **not distributed** in the published application and are therefore not attributed here. Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js).
 
+## Environments & proxies
+
+This repo pins **public registries** (PyPI for Python, the public npm registry for the frontend) and installs from the committed lockfile — so it behaves the same whether you have no proxy, a corporate mirror, or a different one. Routing to a mirror is a **local** concern; nothing internal is committed.
+
+- **Install (index-agnostic):** `uv sync --frozen` installs the exact pinned versions from `uv.lock` using their public `files.pythonhosted.org` URLs + hashes. It does **not** re-resolve, so your index configuration is irrelevant — this is the reliable path on any network that can reach the public CDN.
+- **Behind a private mirror?** Point uv / npm at it **locally** (never commit it):
+  ```bash
+  export UV_DEFAULT_INDEX=https://<your-mirror>/simple    # Python (uv)
+  echo 'registry=https://<your-mirror>/' > .npmrc          # frontend (.npmrc is gitignored)
+  ```
+- **Re-locking** (`uv lock`) and a **clean `databricks bundle deploy` build** must *resolve* packages (Python build backend + npm), so run those from an environment with public PyPI / npm egress (or a fully-mirroring proxy) — not a network that can only reach a partial internal proxy.
+
+Before publishing or merging, run the public-safety guard: `bash scripts/check-public.sh`.
+
 ## Local development
 
 The app falls back to an in-memory mock when Lakebase isn't reachable, so you can run the full UI locally without any Databricks resources.

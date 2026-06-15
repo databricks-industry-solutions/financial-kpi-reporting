@@ -26,6 +26,11 @@ node_modules/
 .env.local
 .env.*.local
 
+# Local registry/mirror config — must not be committed (keep the repo public)
+.npmrc
+uv.toml
+.uv.toml
+
 # IDE / OS
 .vscode/
 .idea/
