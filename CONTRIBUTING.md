@@ -13,14 +13,6 @@ By submitting a contribution to this repository, you certify that:
 
 If you are contributing on behalf of an organization, you confirm that you have the authority to do so. You agree to confirm these terms in your pull request. Any request that does not explicitely accept the terms will be assumed to have accepted. 
 
-## Keeping the repo public-safe
+## Public repository note
 
-This is a public repository. Do not commit anything tied to an internal network or process:
-
-- **No private registries/mirrors** in `uv.lock`, `pyproject.toml`, `.npmrc`, `uv.toml`, or any config — pin public PyPI / npm. Route to a mirror locally via env vars (see the **Environments & proxies** section of the README); `.npmrc`/`uv.toml` are gitignored.
-- **No internal references** — Jira keys (`FEIP-*`, `LPP-*`), `go/*` links, or internal workspace hosts. That trail belongs in the internal Demo Review Document / Jira, not here.
-- **Before opening a PR**, run the guard:
-  ```bash
-  bash scripts/check-public.sh
-  ```
-  It fails if any of the above leak into tracked files. Re-lock dependencies (`uv lock`) only from an environment with public registry access so the lockfile stays portable.
+Pin **public** registries (PyPI / npm) and don't commit private-mirror config — `.npmrc` and `uv.toml` are gitignored; route to a mirror locally via env vars (see **Environments & proxies** in the README). Re-lock dependencies (`uv lock`) only from an environment with public registry access so the lockfile stays portable.
