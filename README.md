@@ -159,38 +159,7 @@ financial-kpi-reporting/
 
 ## Open-source dependencies
 
-The source in this repository is provided subject to the [Databricks License](LICENSE.md). All included or referenced third-party libraries are subject to the licenses set forth below. Most are permissively licensed (MIT / BSD / Apache-2.0 / ISC); the one copyleft dependency is **psycopg** (LGPL-3.0), used unmodified and dynamically linked at runtime (imported via SQLAlchemy).
-
-### Backend (Python)
-
-| library | description | license | source |
-|---------|-------------|---------|--------|
-| FastAPI | Backend API framework | MIT | https://github.com/fastapi/fastapi |
-| Pydantic Settings | Configuration / settings management | MIT | https://github.com/pydantic/pydantic-settings |
-| Uvicorn | ASGI application server | BSD-3-Clause | https://github.com/encode/uvicorn |
-| Databricks SDK for Python | Lakebase / Genie / workspace APIs | Apache-2.0 | https://github.com/databricks/databricks-sdk-py |
-| psycopg | PostgreSQL driver for Lakebase | **LGPL-3.0** | https://github.com/psycopg/psycopg |
-| SQLAlchemy | SQL toolkit / ORM | MIT | https://github.com/sqlalchemy/sqlalchemy |
-| HTTPX | HTTP client (Genie / Confluence) | BSD-3-Clause | https://github.com/encode/httpx |
-
-### Frontend (JavaScript / TypeScript)
-
-| library | description | license | source |
-|---------|-------------|---------|--------|
-| React / React DOM | UI library | MIT | https://github.com/facebook/react |
-| TanStack Router / Query / Table | Routing, data fetching, tables | MIT | https://github.com/TanStack |
-| Recharts | Charting | MIT | https://github.com/recharts/recharts |
-| Radix UI primitives (via shadcn/ui) | Accessible UI components | MIT | https://github.com/radix-ui/primitives |
-| lucide-react | Icon set | ISC | https://github.com/lucide-icons/lucide |
-| class-variance-authority | Component style variants | Apache-2.0 | https://github.com/joe-bell/cva |
-| clsx | className utility | MIT | https://github.com/lukeed/clsx |
-| Tailwind CSS | CSS framework | MIT | https://github.com/tailwindlabs/tailwindcss |
-| tailwind-merge | Tailwind class merging | MIT | https://github.com/dcastil/tailwind-merge |
-| sonner | Toast notifications | MIT | https://github.com/emilkowalski/sonner |
-| react-error-boundary | Error boundaries | MIT | https://github.com/bvaughn/react-error-boundary |
-| tw-animate-css | Tailwind animation utilities | MIT | https://github.com/Wombosvideo/tw-animate-css |
-
-> Build-time and developer tooling (Hatchling, uv, Vite, TypeScript) and the internal **APX** scaffolder are **not distributed** in the published application and are therefore not attributed here. Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js).
+All third-party dependencies — grouped by license, with versions, project URLs, and copyrights — are listed in **[NOTICE.md](NOTICE.md)** (reviewed and approved by Databricks Legal). They are permissively licensed (MIT / BSD-3-Clause / Apache-2.0) except the PostgreSQL driver **psycopg** (LGPL-3.0), which is used unmodified and dynamically linked at runtime (imported via SQLAlchemy). Build-time tooling and the internal APX scaffolder are not distributed and are not attributed. Full version specs: `pyproject.toml` (Python) and `package.json` (Node.js).
 
 ## Environments & proxies
 
