@@ -30,7 +30,7 @@
         "@opentelemetry/api-logs": "^0.218.0",
         "@opentelemetry/exporter-logs-otlp-http": "^0.218.0",
         "@opentelemetry/resources": "^2.7.1",
-        "@opentelemetry/sdk-logs": "^0.218.0",
+        "@opentelemetry/sdk-logs": "^0.219.0",
         "@tailwindcss/vite": "^4.3.0",
         "@tanstack/react-router-devtools": "1.167.0",
         "@tanstack/router-plugin": "^1.168.13",
