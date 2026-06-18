@@ -17,6 +17,16 @@ Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Mar
 
 The Confluence publish-to-wiki feature is **off by default** — the app works without it. Flip the `enable_confluence` widget in notebook 03 to turn it on.
 
+## Screenshots
+
+**Executive Overview** — consolidated KPI dashboard: completion / lock summary cards, per-region status, and the embedded *Financial KPI Analyst* (Databricks Genie) for natural-language Q&A.
+
+![Executive Overview dashboard](docs/screenshots/executive-overview.png)
+
+**KPI Reporting** — regional leads enter, justify, and lock monthly KPI actuals; locked rows are published to Confluence.
+
+![KPI Reporting table](docs/screenshots/kpi-reporting.png)
+
 ## Architecture
 
 ```
