@@ -49,7 +49,7 @@ jobs:
       APP_NAME: ${{ github.event.inputs.app_name || vars.APP_NAME || 'kpi-reporting' }}
       LAKEBASE_PROJECT: ${{ github.event.inputs.lakebase_project || vars.LAKEBASE_PROJECT || 'kpi-reporting' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Require Databricks secrets
         run: |
