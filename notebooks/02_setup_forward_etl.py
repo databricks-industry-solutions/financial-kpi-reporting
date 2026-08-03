@@ -13,9 +13,8 @@
 # MAGIC **Steps:**
 # MAGIC 1. Set `REPLICA IDENTITY FULL` on source tables (required for CDC)
 # MAGIC 2. Create the destination Unity Catalog schema (idempotent)
-# MAGIC 3. One-time UI activation of Lakebase CDF — instructions render with your
-# MAGIC    widget values
-# MAGIC 4. Verify sync status
+# MAGIC 3. Create the Lakebase CDF configuration via the SDK (idempotent)
+# MAGIC 4. Wait for the tables to reach STREAMING state
 # MAGIC 5. Create clean views on top of CDC history tables for Genie
 # MAGIC 6. Verification summary
 # MAGIC
@@ -27,7 +26,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -U "databricks-sdk>=0.74.0" "psycopg[binary]>=3.0"
+# MAGIC %pip install -U "databricks-sdk>=0.123.0" "psycopg[binary]>=3.0"
 # MAGIC dbutils.library.restartPython()
 # MAGIC # databricks-sdk is upgraded so the `w.postgres.*` connection-info calls
 # MAGIC # below work — that service is newer than the SDK bundled in the runtime.
@@ -126,73 +125,113 @@ print(f"Schema ready: {CATALOG}.{SCHEMA}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3 — Activate Lakebase CDF (one-time UI step)
+# MAGIC ## Step 3 — Activate Lakebase CDF (SDK)
 # MAGIC
-# MAGIC Lakebase CDF does not yet have a REST API — activation must be done
-# MAGIC through the workspace UI. The cell below renders the exact values to
-# MAGIC plug into the form based on your widget settings.
+# MAGIC Creates a CDF configuration via `w.postgres.create_cdf_config`, which
+# MAGIC continuously replicates all tables in the Postgres `public` schema to Delta
+# MAGIC tables in Unity Catalog. The configuration is immutable once created —
+# MAGIC idempotent on re-runs (skips creation if the config already exists).
+# MAGIC
+# MAGIC > ⏳ **The first run blocks for a few minutes** while the initial table snapshot
+# MAGIC > completes. Re-runs are instant (config already exists, tables already streaming).
 
 # COMMAND ----------
 
-displayHTML(f"""
-<div style="padding: 16px 20px; background: #fff8e1; border-left: 4px solid #f5a623; border-radius: 6px; font-family: -apple-system, system-ui, sans-serif;">
-  <h3 style="margin: 0 0 12px 0;">Activate Lakebase CDF (UI)</h3>
-  <ol style="line-height: 1.7;">
-    <li>Open <strong>Lakebase</strong> in the workspace sidebar</li>
-    <li>Select project <strong>{LAKEBASE_PROJECT_ID}</strong> → branch <strong>production</strong></li>
-    <li>Open the <strong>Branch overview</strong> → <strong>Lakebase Change Data Feed (CDF)</strong> tab <span style="color:#777;">(formerly labelled "Lakehouse sync")</span></li>
-    <li>Click <strong>Start sync</strong></li>
-    <li>Configure with these values:
-      <table style="margin-top: 8px; border-collapse: collapse;">
-        <tr><td style="padding: 4px 12px 4px 0;">Source database</td><td><code>databricks_postgres</code></td></tr>
-        <tr><td style="padding: 4px 12px 4px 0;">Source schema</td><td><code>public</code></td></tr>
-        <tr><td style="padding: 4px 12px 4px 0;">Destination catalog</td><td><code>{CATALOG}</code></td></tr>
-        <tr><td style="padding: 4px 12px 4px 0;">Destination schema</td><td><code>{SCHEMA}</code></td></tr>
-      </table>
-    </li>
-    <li>Confirm and start the sync</li>
-  </ol>
-  <p style="margin: 12px 0 0 0; font-size: 13px; color: #555;">
-    Once activated, Lakebase CDF will continuously replicate changes from
-    PostgreSQL to Delta tables named <code>lb_&lt;table&gt;_history</code>
-    in <code>{CATALOG}.{SCHEMA}</code>. Then re-run this notebook from Step 4
-    to create the clean views Genie reads.
-  </p>
-</div>
-""")
+from databricks.sdk.errors import NotFound
+from databricks.sdk.service.postgres import CdfConfig
+
+# The CDF config lives under the database, not just the project.
+# Lakebase creates one default database called `databricks_postgres`.
+_databases = list(w.postgres.list_databases(
+    parent=f"projects/{LAKEBASE_PROJECT_ID}/branches/production"
+))
+if not _databases:
+    raise ValueError(
+        f"No databases found under projects/{LAKEBASE_PROJECT_ID}/branches/production. "
+        "Did notebook 01 finish creating the project?"
+    )
+_db_path = _databases[0].name   # "projects/<id>/branches/production/databases/<uid>"
+_cdf_config_id = "public"       # matches the Postgres schema name
+_config_path = f"{_db_path}/cdf-configs/{_cdf_config_id}"
+
+print(f"Database path: {_db_path}")
+print(f"CDF config path: {_config_path}")
+
+# --- Create CDF config (idempotent: get → create) ---
+try:
+    existing = w.postgres.get_cdf_config(name=_config_path)
+    print(f"CDF config already exists ({existing.name}) — skipping creation.")
+except NotFound:
+    print(f"Creating CDF config: postgres public → {CATALOG}.{SCHEMA} ...")
+    op = w.postgres.create_cdf_config(
+        parent=_db_path,
+        cdf_config=CdfConfig(
+            catalog=CATALOG,
+            postgres_schema="public",
+            schema=SCHEMA,
+        ),
+        cdf_config_id=_cdf_config_id,
+    )
+    # .wait() blocks until the long-running operation finishes; raises on failure.
+    result = op.wait()
+    print(f"CDF config created: {result.name}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 4 — Verify sync status
+# MAGIC ## Step 4 — Wait for tables to start streaming
 # MAGIC
-# MAGIC Query the `wal2delta.tables` system table to confirm all tables are syncing.
+# MAGIC Each table transitions `CDF_STATE_SNAPSHOTTING` (initial data copy) →
+# MAGIC `CDF_STATE_STREAMING` (live CDC). The initial snapshot typically takes 1–3 minutes.
 
 # COMMAND ----------
 
+import time
+
+from databricks.sdk.service.postgres import CdfState
+
+STREAMING = CdfState.CDF_STATE_STREAMING
+SNAPSHOTTING = CdfState.CDF_STATE_SNAPSHOTTING
+EXPECTED_TABLES = set(TABLES)
+
 sync_active = False
-try:
-    with psycopg.connect(conn_string) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM wal2delta.tables LIMIT 0")
-            col_names = [desc[0] for desc in cur.description]
-            print(f"wal2delta.tables columns: {col_names}")
+statuses = []
+streaming = set()
+snapshotting = set()
+status_lines = []
+print(f"Waiting for all {len(EXPECTED_TABLES)} tables to reach STREAMING...")
 
-            cur.execute("SELECT * FROM wal2delta.tables ORDER BY 1")
-            rows = cur.fetchall()
+for _attempt in range(60):
+    statuses = list(w.postgres.list_cdf_statuses(parent=_config_path))
+    by_table = {s.postgres_table: s.state for s in statuses}
 
-    if not rows:
-        print("No sync entries found. Has Lakebase CDF been activated? (See Step 3)")
-    else:
+    streaming = {t for t, st in by_table.items() if st == STREAMING}
+    snapshotting = {t for t, st in by_table.items() if st == SNAPSHOTTING}
+
+    status_lines = []
+    for t in sorted(EXPECTED_TABLES):
+        st = by_table.get(t)
+        icon = "✅" if st == STREAMING else ("⏳" if st == SNAPSHOTTING else "❓")
+        status_lines.append(f"  {icon} {t}: {st.value if st else 'NOT_FOUND'}")
+
+    summary = "  |  ".join(
+        f"{t}={by_table.get(t, '?')}" for t in sorted(EXPECTED_TABLES)
+    )
+    print(f"[{_attempt+1:02d}] {summary}")
+
+    if EXPECTED_TABLES <= streaming:
         sync_active = True
-        for row in rows:
-            print(dict(zip(col_names, row)))
-except Exception as e:
-    if "wal2delta" in str(e).lower():
-        print("Lakebase CDF has not been activated yet — wal2delta schema does not exist.")
-        print("Complete the one-time UI activation in Step 3, then re-run this notebook.")
-    else:
-        raise
+        print("\nAll tables streaming ✅")
+        break
+
+    time.sleep(10)
+else:
+    print(f"\nTimeout. Streaming: {streaming}. Snapshotting: {snapshotting}.")
+    print("Continuing — views will be created over whatever data has landed so far.")
+    sync_active = bool(statuses)
+
+for line in status_lines:
+    print(line)
 
 # COMMAND ----------
 
@@ -206,8 +245,8 @@ except Exception as e:
 # COMMAND ----------
 
 if not sync_active:
-    print("Skipping view creation — Lakebase CDF is not active yet.")
-    print("Complete the one-time UI activation in Step 3, then re-run this notebook.")
+    print("Skipping view creation — Lakebase CDF is not active yet (no tables streaming).")
+    print("Check Steps 3 and 4 above for errors, then re-run this notebook.")
 else:
     # Lakebase CDF adds these CDC metadata columns to every history table.
     # _pg_change_type values: 'insert', 'update_postimage', 'delete'
@@ -277,11 +316,13 @@ else:
 
 if not sync_active:
     print("Skipping metric view — Lakebase CDF is not active yet (the kpi_submissions view must exist first).")
+    print("Re-run the notebook once Steps 3–5 complete.")
 else:
     from pyspark.sql import Row
 
     # Per-KPI targets — governed reference data for the analytical layer.
     # (number, name, target_value, unit, higher_is_better) — mirrors notebook 01 KPI_DEFINITIONS.
+    # NOTE: these must match notebook 01's KPI_DEFINITIONS exactly (same kpi_number).
     KPI_TARGETS = [
         (1, "Revenue Growth",   8.5,       "%",    True),
         (2, "Operating Margin", 14.0,      "%",    True),
@@ -358,10 +399,8 @@ else:
 
 if not sync_active:
     print("Skipping verification — Lakebase CDF is not active yet.")
-    print("\nDone so far: Step 1 (REPLICA IDENTITY) and Step 2 (destination schema).")
-    print("Next:")
-    print("  1. Complete the one-time UI activation (Step 3 above)")
-    print("  2. Re-run this notebook to create views and verify")
+    print("\nDone so far: Step 1 (REPLICA IDENTITY), Step 2 (destination schema), Step 3 (CDF config created).")
+    print("Re-run the notebook — Step 4 will wait for tables to reach STREAMING state.")
 else:
     print(f"{'View':<60} {'Rows'}")
     print("-" * 70)

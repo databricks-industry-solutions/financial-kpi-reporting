@@ -43,11 +43,13 @@ class GenieClient:
         try:
             if conversation_id:
                 message = await asyncio.to_thread(
-                    genie.create_message_and_wait, self.space_id, conversation_id, content, _WAIT_TIMEOUT
+                    genie.create_message_and_wait, self.space_id, conversation_id, content,
+                    timeout=_WAIT_TIMEOUT,
                 )
             else:
                 message = await asyncio.to_thread(
-                    genie.start_conversation_and_wait, self.space_id, content, _WAIT_TIMEOUT
+                    genie.start_conversation_and_wait, self.space_id, content,
+                    timeout=_WAIT_TIMEOUT,
                 )
         except Exception as e:
             logger.warning(f"Genie message did not complete: {type(e).__name__}: {e}")

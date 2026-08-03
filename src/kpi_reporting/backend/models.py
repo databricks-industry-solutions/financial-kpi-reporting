@@ -24,6 +24,63 @@ class CurrentUser(BaseModel):
     is_executive: bool = False
 
 
+# --- Tasks ---
+
+# --- Risk Report ---
+
+class RiskItem(BaseModel):
+    model_config = {"extra": "ignore"}
+    rank: int = 1
+    title: str = ""
+    severity: str = "medium"    # "high" | "medium" | "low"
+    affected_regions: list[str] = []
+    affected_kpis: list[str] = []
+    evidence: str = ""          # 1-2 sentences from the actual data
+    recommended_action: str = ""
+
+class RegionRiskSummary(BaseModel):
+    model_config = {"extra": "ignore"}
+    region_name: str = ""
+    overall_sentiment: str = "neutral"   # "positive" | "neutral" | "cautious" | "negative"
+    risk_level: str = "none"             # "high" | "medium" | "low" | "none"
+    headline: str = ""                   # one sentence
+    kpi_sentiments: dict[str, str] = {}  # {kpi_name: sentiment}
+
+class RiskReport(BaseModel):
+    period: str
+    generated_at: str
+    executive_summary: str
+    top_risks: list[RiskItem]
+    region_summaries: list[RegionRiskSummary]
+    cross_cutting_patterns: str
+    outlook: str
+
+
+class TaskAction(BaseModel):
+    label: str
+    route: str
+    variant: str = "default"  # "default" | "destructive" | "outline"
+
+
+class TaskItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    period: str
+    status: str  # "pending" | "in_progress" | "done"
+    count: int | None = None          # generic count (GM: unjustified KPIs)
+    total: int | None = None
+    unlocked_count: int | None = None  # CFO: submissions not yet locked
+    negative_count: int | None = None  # CFO: submissions with cautious/negative sentiment
+    route: str | None = None           # primary deep-link route
+    actions: list[TaskAction] = []     # labelled action buttons
+
+
+class TasksResponse(BaseModel):
+    tasks: list[TaskItem]
+    period: str  # most relevant period
+
+
 # --- Departments ---
 
 class DepartmentOut(BaseModel):
@@ -111,11 +168,33 @@ class PublishDashboardSummaryRequest(BaseModel):
     period: str | None = None
 
 
+# --- Agent ---
+
+class JustifyRequest(BaseModel):
+    submission_id: str
+    field: str  # e.g. "key_drivers_quantitative"
+
+
+class NarrativeRequest(BaseModel):
+    period: str  # e.g. "Jan 2026"
+
+
+class NarrativeResponse(BaseModel):
+    narrative: str
+
+
 # --- Genie ---
 
 class GenieSpaceUrl(BaseModel):
     url: str
     space_id: str
+
+
+# --- AI/BI Dashboard ---
+
+class AiBiDashboardUrl(BaseModel):
+    url: str
+    dashboard_id: str
 
 
 class GenieAskRequest(BaseModel):
@@ -127,7 +206,7 @@ class GenieAttachment(BaseModel):
     text: str | None = None
     sql: str | None = None
     columns: list[str] = []
-    data_array: list[list[str]] = []
+    data_array: list = []
     row_count: int = 0
     truncated: bool = False
 
@@ -140,3 +219,25 @@ class GenieAskResponse(BaseModel):
     message_id: str | None = None
     status: str
     attachments: list[GenieAttachment] = []
+
+
+# --- Forecasting ---
+
+class ForecastPoint(BaseModel):
+    period: str       # e.g. "Apr 2026"
+    actual: float | None = None
+    low: float | None = None
+    mid: float | None = None
+    high: float | None = None
+    is_forecast: bool = False
+
+
+class KpiForecast(BaseModel):
+    kpi_name: str
+    kpi_unit: str
+    points: list[ForecastPoint]
+    insight: str      # 1-2 sentence Claude commentary
+
+
+class ForecastResponse(BaseModel):
+    forecasts: list[KpiForecast]

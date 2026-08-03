@@ -10,7 +10,7 @@
 # MAGIC | # | Step | Where it happens | Required? |
 # MAGIC |---|------|------------------|-----------|
 # MAGIC | 1 | **Provision Lakebase + seed data** | this notebook | yes |
-# MAGIC | 2 | **Activate Lakebase CDF** (Change Data Feed, formerly "Lakehouse Sync") | `notebooks/02_setup_forward_etl.py` + UI | yes (creates the Delta tables Genie reads) |
+# MAGIC | 2 | **Activate Lakebase CDF** (Change Data Feed, formerly "Lakehouse Sync") | `notebooks/02_setup_forward_etl.py` | yes (creates the Delta tables Genie reads) |
 # MAGIC | 3 | **Genie Space + Confluence + App deploy** | `notebooks/03_deploy_app.py` (guided checklist) | yes |
 # MAGIC
 # MAGIC > **Order matters**: Lakebase CDF (notebook 02) must run before the Genie
@@ -38,8 +38,8 @@
 # MAGIC `kpi_submissions` tables (matching the application's runtime schema),
 # MAGIC and seeds realistic synthetic data. Idempotent — safe to re-run.
 # MAGIC
-# MAGIC The widget below lets you change the project name if `kpi-reporting`
-# MAGIC is taken in your workspace.
+# MAGIC The widgets below let you change the project name if `kpi-reporting`
+# MAGIC is taken in your workspace, and add your own email to the userbase.
 
 # COMMAND ----------
 
@@ -74,6 +74,7 @@ w = WorkspaceClient()
 dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project ID")
 dbutils.widgets.text("lakebase_display_name", "Financial KPI Reporting", "Lakebase display name")
 dbutils.widgets.text("suspend_after_minutes", "5", "Auto-suspend compute after N idle minutes (0 = never suspend)")
+dbutils.widgets.text("demo_user_email", "", "Your SSO email (added as a General Manager for the demo — leave blank to skip)")
 
 # COMMAND ----------
 
@@ -81,9 +82,11 @@ dbutils.widgets.text("suspend_after_minutes", "5", "Auto-suspend compute after N
 LAKEBASE_PROJECT_ID = dbutils.widgets.get("lakebase_project").strip()
 LAKEBASE_DISPLAY_NAME = dbutils.widgets.get("lakebase_display_name").strip()
 SUSPEND_AFTER_MINUTES = int(dbutils.widgets.get("suspend_after_minutes").strip() or "0")
+DEMO_USER_EMAIL = dbutils.widgets.get("demo_user_email").strip()
 print(f"Project ID:   {LAKEBASE_PROJECT_ID}")
 print(f"Display name: {LAKEBASE_DISPLAY_NAME}")
 print(f"Auto-suspend: {f'after {SUSPEND_AFTER_MINUTES} min idle' if SUSPEND_AFTER_MINUTES else 'never (always on)'}")
+print(f"Demo user:    {DEMO_USER_EMAIL or '(none — skipping userbase entry)'}")
 
 # COMMAND ----------
 
@@ -349,6 +352,22 @@ with psycopg.connect(conn_string) as conn:
             )
         print(f"Seeded {len(USERBASE)} userbase entries")
 
+        # Add the notebook runner's own identity as a General Manager so they can
+        # log into the deployed app and see the submission experience first-hand.
+        if DEMO_USER_EMAIL:
+            cur.execute(
+                """INSERT INTO monthly_reporting_userbase
+                       (employee_business_email, employee_name, department_name, operation_unit_code, job_name)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (employee_business_email) DO UPDATE SET
+                       employee_name = EXCLUDED.employee_name,
+                       department_name = EXCLUDED.department_name,
+                       operation_unit_code = EXCLUDED.operation_unit_code,
+                       job_name = EXCLUDED.job_name""",
+                (DEMO_USER_EMAIL, "Alex Morgan", "Region North", "REGN", "General Manager"),
+            )
+            print(f"Added demo user: {DEMO_USER_EMAIL} → Alex Morgan (General Manager, Region North)")
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -610,7 +629,7 @@ displayHTML(f"""
 # MAGIC
 # MAGIC 1. Sets `REPLICA IDENTITY FULL` on the source tables (required for CDC)
 # MAGIC 2. Creates the destination schema in your chosen catalog
-# MAGIC 3. Renders the exact values to plug into the Lakebase CDF UI
+# MAGIC 3. Creates the Lakebase CDF configuration via the SDK (no UI steps needed)
 # MAGIC 4. Verifies sync activation and creates clean views the Genie Space reads
 # MAGIC
 # MAGIC When notebook 02 finishes you'll have these tables in Unity Catalog

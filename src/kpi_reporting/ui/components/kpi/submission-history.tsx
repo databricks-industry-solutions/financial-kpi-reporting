@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ExternalLink, BookOpen, Pencil, Lock, Unlock, UserCheck } from "lucide-react";
+import { JustifyButton } from "@/components/agent/justify-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -33,14 +34,14 @@ const MONTH_ORDER: Record<string, number> = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
 };
 
-/** Format a KPI value with its unit for display. Large EUR values become MEUR. */
+/** Format a KPI value with its unit for display. Large currency values are abbreviated. */
 function formatKpiValue(value: number | null | undefined, unit: string): string {
   if (value == null) return "—";
-  if (unit === "EUR" && Math.abs(value) >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)} MEUR`;
+  if (unit === "USD" && Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M USD`;
   }
-  if (unit === "EUR") {
-    return `${value.toLocaleString()} EUR`;
+  if (unit === "USD") {
+    return `${value.toLocaleString()} USD`;
   }
   return `${value} ${unit}`;
 }
@@ -466,6 +467,13 @@ export function KpiReviewTable() {
                     rows={field.rows}
                     className="text-sm"
                   />
+                  {selectedSubmission && (
+                    <JustifyButton
+                      submissionId={selectedSubmission.id}
+                      field={field.key}
+                      onDraft={(text) => updateField(field.key, text)}
+                    />
+                  )}
                 </div>
               ))}
 
