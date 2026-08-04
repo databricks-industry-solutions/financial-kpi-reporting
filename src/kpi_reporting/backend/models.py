@@ -218,6 +218,7 @@ class GenieAskResponse(BaseModel):
     conversation_id: str | None = None
     message_id: str | None = None
     status: str
+    error: str | None = None  # Genie's own error text, present when status == "FAILED"
     attachments: list[GenieAttachment] = []
 
 

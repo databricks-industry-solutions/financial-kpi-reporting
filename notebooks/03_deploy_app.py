@@ -41,6 +41,7 @@ dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project")
 dbutils.widgets.text("genie_space_id", "", "Genie Space ID (blank = auto-create in Step 1)")
 dbutils.widgets.text("genie_warehouse_id", "", "SQL warehouse ID for the Genie Space (Step 1)")
 dbutils.widgets.text("aibi_dashboard_id", "", "AI/BI Dashboard ID (auto-created by Step 3c; paste here to reuse on re-runs)")
+dbutils.widgets.text("aibi_warehouse_id", "", "SQL warehouse ID for the embedded AI/BI Dashboard (Step 3c)")
 # Catalog and schema where Lakebase CDF wrote the Delta views — must match
 # whatever you picked in notebook 02's widgets.
 dbutils.widgets.text("target_catalog", "main", "Target catalog (from notebook 02)")
@@ -65,6 +66,7 @@ LAKEBASE_PROJECT = dbutils.widgets.get("lakebase_project").strip()
 GENIE_SPACE_ID = dbutils.widgets.get("genie_space_id").strip()
 GENIE_WAREHOUSE_ID = dbutils.widgets.get("genie_warehouse_id").strip()
 AIBI_DASHBOARD_ID = dbutils.widgets.get("aibi_dashboard_id").strip()
+AIBI_WAREHOUSE_ID = dbutils.widgets.get("aibi_warehouse_id").strip()
 TARGET_CATALOG = dbutils.widgets.get("target_catalog").strip()
 TARGET_SCHEMA = dbutils.widgets.get("target_schema").strip()
 ENABLE_CONFLUENCE = dbutils.widgets.get("enable_confluence") == "yes"
@@ -121,9 +123,13 @@ w = WorkspaceClient()
 # is intentionally left out — it's only used by the app for SSO mapping and isn't
 # useful for AI Q&A.
 GENIE_TABLES = [
-    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_metrics",       # governed metric view (notebook 02) — measures like Avg Achievement, Lock Rate
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.departments",
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_submissions",   # row-level detail for drill-down questions
+    # kpi_metrics is intentionally excluded: it is a Unity Catalog metric view
+    # (CREATE VIEW … WITH METRICS) which requires MEASURE() syntax. Genie generates
+    # plain SQL and cannot use that syntax, causing every query to fail with
+    # MessageStatus.FAILED. kpi_submissions covers all the same analytical ground
+    # via standard GROUP BY aggregations.
 ]
 
 # System instructions that help Genie analyse the KPI data accurately. Edit freely;
@@ -138,16 +144,14 @@ GENIE_INSTRUCTIONS = [
     "- `kpi_value` is the actual reported number; its unit is in `kpi_unit`.\n",
     "- `kpi_lockin = TRUE` means the regional lead locked and formally submitted the data.\n",
     "- `key_drivers_quantitative` / `key_drivers_qualitative` explain WHY the KPI landed where it did.\n",
-    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n",
-    "- `kpi_metrics` is a governed Unity Catalog metric view — prefer it for aggregate ",
-    "questions. Query its measures (Submissions, Lock Rate, Reviewed Rate, Regions ",
-    "Reporting, Avg KPI Value, Avg Achievement) grouped by its dimensions (Region, KPI, ",
-    "KPI Category, Reporting Month, Status). `Avg Achievement` already accounts for KPI ",
-    "direction (for DSO and OPEX Ratio, lower actuals are better), so ~1.0 means on target.\n\n",
+    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n\n",
     "Analysis guidance:\n",
     "- Focus on trends across months, regional comparisons, and achievement rates.\n",
     "- Highlight under- and over-performers, and use the key_drivers columns to ",
-    "explain outliers rather than just reporting numbers.",
+    "explain outliers rather than just reporting numbers.\n",
+    "- For achievement rate, compare `kpi_value` against these targets: ",
+    "Revenue Growth 8.5%, Operating Margin 14.0%, DSO 52 days (lower is better), ",
+    "OPEX Ratio 22.0% (lower is better), Free Cash Flow $4,200,000.",
 ]
 
 if GENIE_SPACE_ID:
@@ -289,7 +293,7 @@ else:
     print(f"Stored secret: {SECRET_SCOPE}/{SECRET_KEY}")
 
     # Clear the widget so the token isn't sitting in notebook state
-    dbutils.widgets.set("confluence_token", "")
+    dbutils.widgets.text("confluence_token", "")
     print("Cleared the `confluence_token` widget.")
 
 # COMMAND ----------
@@ -400,15 +404,18 @@ for r in resources:
 # MAGIC explicit grants:
 # MAGIC
 # MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
-# MAGIC - **Genie chat returns FAILED** (UC blocks the SQL Genie generates)
+# MAGIC - **Genie chat returns FAILED** (SP lacks Genie Space or UC permissions)
+# MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
 # MAGIC
 # MAGIC The cell below grants the App SP what it needs:
 # MAGIC
 # MAGIC | Layer | Object | Privilege |
 # MAGIC |---|---|---|
+# MAGIC | Genie | Genie Space | `CAN_RUN` (required to call the Conversation API as the SP) |
+# MAGIC | SQL | SQL warehouse | `CAN_USE` (Genie executes its SQL on the warehouse) |
 # MAGIC | UC | `<target_catalog>` | `USE CATALOG` |
 # MAGIC | UC | `<target_catalog>.<target_schema>` | `USE SCHEMA` |
-# MAGIC | UC | `<target_catalog>.<target_schema>.{departments, kpi_submissions, monthly_reporting_userbase}` | `SELECT` |
+# MAGIC | UC | `<target_catalog>.<target_schema>.{departments, kpi_submissions, ...}` | `SELECT` |
 # MAGIC | Lakebase | `public` schema | `USAGE` |
 # MAGIC | Lakebase | `public.{departments, kpi_submissions, monthly_reporting_userbase}` | `SELECT, INSERT, UPDATE, DELETE` |
 # MAGIC | Lakebase | future tables in `public` | Same DML via `ALTER DEFAULT PRIVILEGES` |
@@ -435,12 +442,16 @@ print(f"App SP: {sp_client_id}")
 # Lakebase Postgres tables — these live in the `public` schema of the Lakebase DB
 # (created/seeded by notebook 01). Used for the Lakebase GRANTs further below.
 LAKEBASE_TABLES = ("departments", "kpi_submissions", "monthly_reporting_userbase")
-# Unity Catalog objects the app/Genie read = the synced views PLUS kpi_targets and the
-# kpi_metrics metric view (notebook 02). Genie needs SELECT on the metric view AND its
-# source tables or queries fail with PERMISSION_DENIED. NOTE: kpi_targets/kpi_metrics
-# are UC-only (they do NOT exist in Lakebase Postgres), so they're excluded from the
-# Lakebase grants.
-UC_TABLES = LAKEBASE_TABLES + ("kpi_targets", "kpi_metrics")
+# Unity Catalog objects the App SP needs SELECT on within TARGET_CATALOG.TARGET_SCHEMA:
+#   - The clean views (same names as LAKEBASE_TABLES) created by notebook 02 step 5
+#   - The lb_*_history raw CDC tables Lakebase CDF creates — Genie resolves views to
+#     their underlying sources and checks permissions on those too
+#   - kpi_targets and kpi_metrics (UC-only, created by notebook 02 step 6)
+UC_TABLES = (
+    "departments", "kpi_submissions", "monthly_reporting_userbase",
+    "lb_departments_history", "lb_kpi_submissions_history", "lb_monthly_reporting_userbase_history",
+    "kpi_targets", "kpi_metrics",
+)
 
 # --- Unity Catalog grants (so Genie can read the synced Delta views) ---
 # USE_CATALOG requires MANAGE on the catalog, which the notebook runner may not
@@ -533,6 +544,29 @@ if GENIE_WAREHOUSE_ID:
 else:
     print("\nSkipping warehouse grant — the genie_warehouse_id widget is blank.")
     print("  If Genie queries fail with PermissionDenied, set it and re-run this cell.")
+
+# --- Genie Space grant (so the App SP can call the Conversation API) ---
+# Without CAN_RUN on the Space, every w.genie.start_conversation / create_message
+# call from the App's SP returns MessageStatus.FAILED — even though UC and the
+# warehouse are correctly granted.  The UI works because you're logged in as yourself;
+# the App runs as its service principal, which needs its own space-level permission.
+from databricks.sdk.service.iam import AccessControlRequest, PermissionLevel
+
+print(f"\nGranting CAN_RUN on Genie Space {GENIE_SPACE_ID} to App SP {sp_client_id}...")
+try:
+    w.permissions.update(
+        request_object_type="genie-rooms",
+        request_object_id=GENIE_SPACE_ID,
+        access_control_list=[
+            AccessControlRequest(
+                service_principal_name=sp_client_id,
+                permission_level=PermissionLevel.CAN_RUN,
+            ),
+        ],
+    )
+    print(f"  CAN_RUN on genie-rooms/{GENIE_SPACE_ID} — App SP can now call the Conversation API.")
+except Exception as e:
+    print(f"  Genie Space grant skipped (grant manually if needed): {e}")
 
 # COMMAND ----------
 
@@ -647,7 +681,7 @@ if AIBI_DASHBOARD_ID:
                 serialized_dashboard=_serialized,
             ),
         )
-        w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True)
+        w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True, warehouse_id=AIBI_WAREHOUSE_ID or None)
         print(f"Dashboard updated and re-published: {AIBI_DASHBOARD_ID}")
     except _NotFound:
         print(f"Dashboard {AIBI_DASHBOARD_ID} not found (trashed?) — creating a new one.")
@@ -666,7 +700,9 @@ if not AIBI_DASHBOARD_ID:
     print("Tip: paste this ID into the `aibi_dashboard_id` widget so future re-runs update it.")
 
     # Publish with embedded credentials so the app's iframe renders without a login prompt.
-    w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True)
+    # warehouse_id pins the SQL warehouse used to run dashboard queries in the embed;
+    # without it the published embed has no warehouse selected and every query fails.
+    w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True, warehouse_id=AIBI_WAREHOUSE_ID or None)
     print(f"Published (embed_credentials=True): /embed/dashboardsv3/{AIBI_DASHBOARD_ID}/published")
 
 print(f"\nAI/BI Dashboard ID: {AIBI_DASHBOARD_ID}")

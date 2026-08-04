@@ -143,7 +143,9 @@ export function GenieChatPanel() {
           ? textParts.join("\n\n")
           : resp.status === "COMPLETED" || resp.status === "EXECUTING_QUERY"
             ? "Here are the results:"
-            : `Query ended with status: ${resp.status}`;
+            : resp.error
+              ? `Genie error: ${resp.error}`
+              : `Query ended with status: ${resp.status}`;
 
         setMessages((prev) => [
           ...prev,

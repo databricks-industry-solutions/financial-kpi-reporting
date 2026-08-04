@@ -66,6 +66,7 @@ export interface GenieAskRequest {
 export interface GenieAskResponse {
   attachments?: GenieAttachment[];
   conversation_id?: string | null;
+  error?: string | null;
   message_id?: string | null;
   status: string;
 }
