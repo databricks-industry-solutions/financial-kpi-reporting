@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
+import { useDemoPersona } from "@/lib/demo-persona";
 import { toast } from "sonner";
 import { BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,9 +15,13 @@ import { SummaryCards } from "@/components/dashboard/summary-cards";
 import { DepartmentGrid } from "@/components/dashboard/department-grid";
 import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown";
 import { GenieChatPanel } from "@/components/dashboard/genie-chat";
+import { NarrativePanel } from "@/components/agent/narrative-panel";
 import { useGetDashboardSummary, usePublishDashboardSummary } from "@/lib/api";
 
 export const Route = createFileRoute("/_sidebar/executive-dashboard")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    period: typeof search.period === "string" ? search.period : undefined,
+  }),
   component: () => <ExecutiveDashboardPage />,
 });
 
@@ -44,7 +49,14 @@ function buildPeriods(): { value: string; label: string }[] {
 const PERIODS = buildPeriods();
 
 function ExecutiveDashboardPage() {
-  const [period, setPeriod] = useState<string>("__all__");
+  const { persona } = useDemoPersona();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (persona.id !== "cfo") navigate({ to: "/home" });
+  }, [persona.id, navigate]);
+
+  const { period: searchPeriod } = useSearch({ from: "/_sidebar/executive-dashboard" });
+  const [period, setPeriod] = useState<string>(searchPeriod ?? "__all__");
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
   const activePeriod = period === "__all__" ? null : period;
@@ -116,6 +128,11 @@ function ExecutiveDashboardPage() {
             onSelectDepartment={setSelectedDeptId}
           />
         </div>
+
+        {/* AI Executive Narrative */}
+        <NarrativePanel period={activePeriod} />
+
+        {/* Predictive Forecast */}
 
         {/* Genie Chat */}
         <GenieChatPanel />

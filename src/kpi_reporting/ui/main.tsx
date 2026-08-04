@@ -6,6 +6,7 @@ import { routeTree } from "@/types/routeTree.gen";
 
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DemoPersonaProvider } from "@/lib/demo-persona";
 
 const queryClient = new QueryClient();
 
@@ -32,7 +33,9 @@ if (!rootElement.innerHTML) {
   root.render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <DemoPersonaProvider>
+          <RouterProvider router={router} />
+        </DemoPersonaProvider>
       </QueryClientProvider>
     </StrictMode>,
   );

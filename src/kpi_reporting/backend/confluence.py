@@ -170,6 +170,78 @@ class ConfluenceClient:
         </table>
         """
 
+    def _build_risk_report_html(self, report: dict) -> str:
+        """Render an AI risk report (dict form of RiskReport) to Confluence storage HTML."""
+        import html as _html
+
+        def esc(v):
+            return _html.escape(str(v or ""))
+
+        period = esc(report.get("period"))
+        generated_at = esc(report.get("generated_at", ""))[:10]
+
+        sev_color = {"high": "#DE350B", "medium": "#FF8B00", "low": "#0052CC"}
+        sent_color = {
+            "positive": "#00875A", "neutral": "#6B778C",
+            "cautious": "#FF8B00", "negative": "#DE350B",
+        }
+
+        # Top risks
+        risk_rows = ""
+        for r in report.get("top_risks", []):
+            sev = str(r.get("severity", "low")).lower()
+            color = sev_color.get(sev, "#0052CC")
+            ccs = ", ".join(esc(c) for c in r.get("affected_regions", []))
+            kpis = ", ".join(esc(k) for k in r.get("affected_kpis", []))
+            risk_rows += f"""<tr>
+                <td><strong>{r.get('rank', '')}</strong></td>
+                <td><span style="color: {color}; font-weight: bold; text-transform: uppercase;">{esc(sev)}</span></td>
+                <td><strong>{esc(r.get('title'))}</strong><br/><em>{esc(r.get('evidence'))}</em></td>
+                <td>{ccs}<br/><em>{kpis}</em></td>
+                <td>{esc(r.get('recommended_action'))}</td>
+            </tr>"""
+
+        # Region summaries
+        cc_rows = ""
+        for cc in report.get("region_summaries", []):
+            sent = str(cc.get("overall_sentiment", "neutral")).lower()
+            color = sent_color.get(sent, "#6B778C")
+            cc_rows += f"""<tr>
+                <td><strong>{esc(cc.get('region_name'))}</strong></td>
+                <td><span style="color: {color}; font-weight: bold; text-transform: capitalize;">{esc(sent)}</span></td>
+                <td style="text-transform: capitalize;">{esc(cc.get('risk_level'))}</td>
+                <td>{esc(cc.get('headline'))}</td>
+            </tr>"""
+
+        return f"""
+        <ac:structured-macro ac:name="info">
+            <ac:rich-text-body>
+                <p><strong>AI-Generated Risk &amp; Sentiment Report</strong> &#8212; Period: {period} &#183; Generated: {generated_at}</p>
+            </ac:rich-text-body>
+        </ac:structured-macro>
+
+        <h2>Executive Summary</h2>
+        <p>{esc(report.get('executive_summary'))}</p>
+
+        <h2>Top Risks</h2>
+        <table>
+            <tr><th>#</th><th>Severity</th><th>Risk &amp; Evidence</th><th>Affected</th><th>Recommended Action</th></tr>
+            {risk_rows}
+        </table>
+
+        <h2>Region Summaries</h2>
+        <table>
+            <tr><th>Region</th><th>Sentiment</th><th>Risk Level</th><th>Headline</th></tr>
+            {cc_rows}
+        </table>
+
+        <h2>Cross-Cutting Patterns</h2>
+        <p>{esc(report.get('cross_cutting_patterns'))}</p>
+
+        <h2>Outlook</h2>
+        <p>{esc(report.get('outlook'))}</p>
+        """
+
     async def publish_page(self, title: str, body: str) -> dict:
         if not self._enabled:
             raise RuntimeError("Confluence integration is not configured")

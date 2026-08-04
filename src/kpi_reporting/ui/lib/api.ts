@@ -1,6 +1,11 @@
 import { useQuery, useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import type { UseQueryOptions, UseSuspenseQueryOptions, UseMutationOptions } from "@tanstack/react-query";
 
+export interface AiBiDashboardUrl {
+  dashboard_id: string;
+  url: string;
+}
+
 export interface ConfluencePublishResult {
   confluence_page_id: string;
   confluence_page_url: string;
@@ -40,6 +45,19 @@ export interface DepartmentOut {
   name: string;
 }
 
+export interface ForecastPoint {
+  actual?: number | null;
+  high?: number | null;
+  is_forecast?: boolean;
+  low?: number | null;
+  mid?: number | null;
+  period: string;
+}
+
+export interface ForecastResponse {
+  forecasts: KpiForecast[];
+}
+
 export interface GenieAskRequest {
   content: string;
   conversation_id?: string | null;
@@ -48,13 +66,14 @@ export interface GenieAskRequest {
 export interface GenieAskResponse {
   attachments?: GenieAttachment[];
   conversation_id?: string | null;
+  error?: string | null;
   message_id?: string | null;
   status: string;
 }
 
 export interface GenieAttachment {
   columns?: string[];
-  data_array?: string[][];
+  data_array?: unknown[];
   row_count?: number;
   sql?: string | null;
   text?: string | null;
@@ -70,6 +89,26 @@ export interface HTTPValidationError {
   detail?: ValidationError[];
 }
 
+export interface JustifyRequest {
+  field: string;
+  submission_id: string;
+}
+
+export interface KpiForecast {
+  insight: string;
+  kpi_name: string;
+  kpi_unit: string;
+  points: ForecastPoint[];
+}
+
+export interface NarrativeRequest {
+  period: string;
+}
+
+export interface NarrativeResponse {
+  narrative: string;
+}
+
 export interface PublishDashboardSummaryRequest {
   period?: string | null;
 }
@@ -77,6 +116,38 @@ export interface PublishDashboardSummaryRequest {
 export interface PublishSubmissionsSummaryRequest {
   department_name: string;
   period?: string | null;
+}
+
+export interface RegionRiskSummary {
+  headline?: string;
+  kpi_sentiments?: Record<string, string>;
+  overall_sentiment?: string;
+  region_name?: string;
+  risk_level?: string;
+}
+
+export interface RiskItem {
+  affected_kpis?: string[];
+  affected_regions?: string[];
+  evidence?: string;
+  rank?: number;
+  recommended_action?: string;
+  severity?: string;
+  title?: string;
+}
+
+export interface RiskReport {
+  cross_cutting_patterns: string;
+  executive_summary: string;
+  generated_at: string;
+  outlook: string;
+  period: string;
+  region_summaries: RegionRiskSummary[];
+  top_risks: RiskItem[];
+}
+
+export interface RiskReportRequest {
+  period: string;
 }
 
 export interface SubmissionOut {
@@ -121,6 +192,31 @@ export interface SubmissionUpdateRequest {
   sentiment_tags?: string | null;
 }
 
+export interface TaskAction {
+  label: string;
+  route: string;
+  variant?: string;
+}
+
+export interface TaskItem {
+  actions?: TaskAction[];
+  count?: number | null;
+  description: string;
+  id: string;
+  negative_count?: number | null;
+  period: string;
+  route?: string | null;
+  status: string;
+  title: string;
+  total?: number | null;
+  unlocked_count?: number | null;
+}
+
+export interface TasksResponse {
+  period: string;
+  tasks: TaskItem[];
+}
+
 export interface ValidationError {
   ctx?: Record<string, unknown>;
   input?: unknown;
@@ -159,6 +255,11 @@ export interface PublishToConfluenceParams {
   sub_id: string;
 }
 
+export interface GetTasksParams {
+  persona: string;
+  department_id?: string | null;
+}
+
 export class ApiError extends Error {
   status: number;
   statusText: string;
@@ -171,6 +272,89 @@ export class ApiError extends Error {
     this.statusText = statusText;
     this.body = body;
   }
+}
+
+export const agentJustify = async (data: JustifyRequest, options?: RequestInit): Promise<{ data: unknown }> => {
+  const res = await fetch("/api/agent/justify", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useAgentJustify(options?: { mutation?: UseMutationOptions<{ data: unknown }, ApiError, JustifyRequest> }) {
+  return useMutation({ mutationFn: (data) => agentJustify(data), ...options?.mutation });
+}
+
+export const agentNarrative = async (data: NarrativeRequest, options?: RequestInit): Promise<{ data: NarrativeResponse }> => {
+  const res = await fetch("/api/agent/narrative", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useAgentNarrative(options?: { mutation?: UseMutationOptions<{ data: NarrativeResponse }, ApiError, NarrativeRequest> }) {
+  return useMutation({ mutationFn: (data) => agentNarrative(data), ...options?.mutation });
+}
+
+export const generateRiskReport = async (data: RiskReportRequest, options?: RequestInit): Promise<{ data: RiskReport }> => {
+  const res = await fetch("/api/agent/risk-report", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useGenerateRiskReport(options?: { mutation?: UseMutationOptions<{ data: RiskReport }, ApiError, RiskReportRequest> }) {
+  return useMutation({ mutationFn: (data) => generateRiskReport(data), ...options?.mutation });
+}
+
+export const publishRiskReport = async (data: RiskReport, options?: RequestInit): Promise<{ data: ConfluencePublishResult }> => {
+  const res = await fetch("/api/agent/risk-report/publish-confluence", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function usePublishRiskReport(options?: { mutation?: UseMutationOptions<{ data: ConfluencePublishResult }, ApiError, RiskReport> }) {
+  return useMutation({ mutationFn: (data) => publishRiskReport(data), ...options?.mutation });
+}
+
+export const getAiBiDashboardUrl = async (options?: RequestInit): Promise<{ data: AiBiDashboardUrl }> => {
+  const res = await fetch("/api/aibi/dashboard-url", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const getAiBiDashboardUrlKey = () => {
+  return ["/api/aibi/dashboard-url"] as const;
+};
+
+export function useGetAiBiDashboardUrl<TData = { data: AiBiDashboardUrl }>(options?: { query?: Omit<UseQueryOptions<{ data: AiBiDashboardUrl }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: getAiBiDashboardUrlKey(), queryFn: () => getAiBiDashboardUrl(), ...options?.query });
+}
+
+export function useGetAiBiDashboardUrlSuspense<TData = { data: AiBiDashboardUrl }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: AiBiDashboardUrl }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: getAiBiDashboardUrlKey(), queryFn: () => getAiBiDashboardUrl(), ...options?.query });
 }
 
 export const getDepartmentDetail = async (params: GetDepartmentDetailParams, options?: RequestInit): Promise<{ data: DepartmentDetail }> => {
@@ -248,6 +432,29 @@ export function useGetDepartments<TData = { data: DepartmentOut[] }>(options?: {
 
 export function useGetDepartmentsSuspense<TData = { data: DepartmentOut[] }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: DepartmentOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
   return useSuspenseQuery({ queryKey: getDepartmentsKey(), queryFn: () => getDepartments(), ...options?.query });
+}
+
+export const getKpiForecast = async (options?: RequestInit): Promise<{ data: ForecastResponse }> => {
+  const res = await fetch("/api/forecast/kpi", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const getKpiForecastKey = () => {
+  return ["/api/forecast/kpi"] as const;
+};
+
+export function useGetKpiForecast<TData = { data: ForecastResponse }>(options?: { query?: Omit<UseQueryOptions<{ data: ForecastResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: getKpiForecastKey(), queryFn: () => getKpiForecast(), ...options?.query });
+}
+
+export function useGetKpiForecastSuspense<TData = { data: ForecastResponse }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: ForecastResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: getKpiForecastKey(), queryFn: () => getKpiForecast(), ...options?.query });
 }
 
 export const genieAsk = async (data: GenieAskRequest, options?: RequestInit): Promise<{ data: GenieAskResponse }> => {
@@ -420,6 +627,34 @@ export const publishToConfluence = async (params: PublishToConfluenceParams, opt
 
 export function usePublishToConfluence(options?: { mutation?: UseMutationOptions<{ data: ConfluencePublishResult }, ApiError, { params: PublishToConfluenceParams }> }) {
   return useMutation({ mutationFn: (vars) => publishToConfluence(vars.params), ...options?.mutation });
+}
+
+export const getTasks = async (params: GetTasksParams, options?: RequestInit): Promise<{ data: TasksResponse }> => {
+  const searchParams = new URLSearchParams();
+  if (params.persona != null) searchParams.set("persona", String(params.persona));
+  if (params?.department_id != null) searchParams.set("department_id", String(params?.department_id));
+  const queryString = searchParams.toString();
+  const url = queryString ? `/api/tasks?${queryString}` : `/api/tasks`;
+  const res = await fetch(url, { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const getTasksKey = (params?: GetTasksParams) => {
+  return ["/api/tasks", params] as const;
+};
+
+export function useGetTasks<TData = { data: TasksResponse }>(options: { params: GetTasksParams; query?: Omit<UseQueryOptions<{ data: TasksResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: getTasksKey(options.params), queryFn: () => getTasks(options.params), ...options?.query });
+}
+
+export function useGetTasksSuspense<TData = { data: TasksResponse }>(options: { params: GetTasksParams; query?: Omit<UseSuspenseQueryOptions<{ data: TasksResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: getTasksKey(options.params), queryFn: () => getTasks(options.params), ...options?.query });
 }
 
 export const version = async (options?: RequestInit): Promise<{ data: VersionOut }> => {

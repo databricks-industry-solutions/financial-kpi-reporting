@@ -40,6 +40,8 @@ dbutils.widgets.text("app_name", "kpi-reporting", "App name")
 dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project")
 dbutils.widgets.text("genie_space_id", "", "Genie Space ID (blank = auto-create in Step 1)")
 dbutils.widgets.text("genie_warehouse_id", "", "SQL warehouse ID for the Genie Space (Step 1)")
+dbutils.widgets.text("aibi_dashboard_id", "", "AI/BI Dashboard ID (auto-created by Step 3c; paste here to reuse on re-runs)")
+dbutils.widgets.text("aibi_warehouse_id", "", "SQL warehouse ID for the embedded AI/BI Dashboard (Step 3c)")
 # Catalog and schema where Lakebase CDF wrote the Delta views — must match
 # whatever you picked in notebook 02's widgets.
 dbutils.widgets.text("target_catalog", "main", "Target catalog (from notebook 02)")
@@ -63,6 +65,8 @@ APP_NAME = dbutils.widgets.get("app_name").strip()
 LAKEBASE_PROJECT = dbutils.widgets.get("lakebase_project").strip()
 GENIE_SPACE_ID = dbutils.widgets.get("genie_space_id").strip()
 GENIE_WAREHOUSE_ID = dbutils.widgets.get("genie_warehouse_id").strip()
+AIBI_DASHBOARD_ID = dbutils.widgets.get("aibi_dashboard_id").strip()
+AIBI_WAREHOUSE_ID = dbutils.widgets.get("aibi_warehouse_id").strip()
 TARGET_CATALOG = dbutils.widgets.get("target_catalog").strip()
 TARGET_SCHEMA = dbutils.widgets.get("target_schema").strip()
 ENABLE_CONFLUENCE = dbutils.widgets.get("enable_confluence") == "yes"
@@ -119,9 +123,13 @@ w = WorkspaceClient()
 # is intentionally left out — it's only used by the app for SSO mapping and isn't
 # useful for AI Q&A.
 GENIE_TABLES = [
-    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_metrics",       # governed metric view (notebook 02) — measures like Avg Achievement, Lock Rate
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.departments",
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_submissions",   # row-level detail for drill-down questions
+    # kpi_metrics is intentionally excluded: it is a Unity Catalog metric view
+    # (CREATE VIEW … WITH METRICS) which requires MEASURE() syntax. Genie generates
+    # plain SQL and cannot use that syntax, causing every query to fail with
+    # MessageStatus.FAILED. kpi_submissions covers all the same analytical ground
+    # via standard GROUP BY aggregations.
 ]
 
 # System instructions that help Genie analyse the KPI data accurately. Edit freely;
@@ -136,16 +144,14 @@ GENIE_INSTRUCTIONS = [
     "- `kpi_value` is the actual reported number; its unit is in `kpi_unit`.\n",
     "- `kpi_lockin = TRUE` means the regional lead locked and formally submitted the data.\n",
     "- `key_drivers_quantitative` / `key_drivers_qualitative` explain WHY the KPI landed where it did.\n",
-    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n",
-    "- `kpi_metrics` is a governed Unity Catalog metric view — prefer it for aggregate ",
-    "questions. Query its measures (Submissions, Lock Rate, Reviewed Rate, Regions ",
-    "Reporting, Avg KPI Value, Avg Achievement) grouped by its dimensions (Region, KPI, ",
-    "KPI Category, Reporting Month, Status). `Avg Achievement` already accounts for KPI ",
-    "direction (for DSO and OPEX Ratio, lower actuals are better), so ~1.0 means on target.\n\n",
+    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n\n",
     "Analysis guidance:\n",
     "- Focus on trends across months, regional comparisons, and achievement rates.\n",
     "- Highlight under- and over-performers, and use the key_drivers columns to ",
-    "explain outliers rather than just reporting numbers.",
+    "explain outliers rather than just reporting numbers.\n",
+    "- For achievement rate, compare `kpi_value` against these targets: ",
+    "Revenue Growth 8.5%, Operating Margin 14.0%, DSO 52 days (lower is better), ",
+    "OPEX Ratio 22.0% (lower is better), Free Cash Flow $4,200,000.",
 ]
 
 if GENIE_SPACE_ID:
@@ -156,13 +162,13 @@ else:
             "Set the `genie_warehouse_id` widget to a SQL warehouse ID, then re-run. "
             "(Genie runs its generated SQL on a warehouse.)"
         )
-    # serialized_space is the Space definition as a JSON string (schema v2:
-    # data_sources + instructions). create_space takes this plus a warehouse.
+    # Step 1a: create the space with data_sources only.
+    # create_space rejects `instructions` inside serialized_space — they have to be
+    # added by a follow-up update_space call (Step 1b below).
     serialized_space = json.dumps({
         "version": 2,
         # create_space requires data_sources.tables sorted by identifier.
         "data_sources": {"tables": [{"identifier": t} for t in sorted(GENIE_TABLES)]},
-        "instructions": {"text_instructions": [{"id": uuid.uuid4().hex, "content": GENIE_INSTRUCTIONS}]},
     })
     space = w.genie.create_space(
         warehouse_id=GENIE_WAREHOUSE_ID,
@@ -172,6 +178,18 @@ else:
     )
     GENIE_SPACE_ID = space.space_id
     print(f"Created Genie Space: {GENIE_SPACE_ID}")
+
+    # Step 1b: attach the instructions. `content` must be an array of strings.
+    serialized_with_instructions = json.dumps({
+        "version": 2,
+        "data_sources": {"tables": [{"identifier": t} for t in sorted(GENIE_TABLES)]},
+        "instructions": {"text_instructions": [{"id": uuid.uuid4().hex, "content": GENIE_INSTRUCTIONS}]},
+    })
+    w.genie.update_space(
+        space_id=GENIE_SPACE_ID,
+        serialized_space=serialized_with_instructions,
+    )
+    print("Added instructions to the Genie Space")
     print(f"Open it: {w.config.host}/genie/rooms/{GENIE_SPACE_ID}")
     print("Tip: paste this ID into the `genie_space_id` widget so future re-runs skip creation.")
 
@@ -275,7 +293,7 @@ else:
     print(f"Stored secret: {SECRET_SCOPE}/{SECRET_KEY}")
 
     # Clear the widget so the token isn't sitting in notebook state
-    dbutils.widgets.set("confluence_token", "")
+    dbutils.widgets.text("confluence_token", "")
     print("Cleared the `confluence_token` widget.")
 
 # COMMAND ----------
@@ -386,15 +404,18 @@ for r in resources:
 # MAGIC explicit grants:
 # MAGIC
 # MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
-# MAGIC - **Genie chat returns FAILED** (UC blocks the SQL Genie generates)
+# MAGIC - **Genie chat returns FAILED** (SP lacks Genie Space or UC permissions)
+# MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
 # MAGIC
 # MAGIC The cell below grants the App SP what it needs:
 # MAGIC
 # MAGIC | Layer | Object | Privilege |
 # MAGIC |---|---|---|
+# MAGIC | Genie | Genie Space | `CAN_RUN` (required to call the Conversation API as the SP) |
+# MAGIC | SQL | SQL warehouse | `CAN_USE` (Genie executes its SQL on the warehouse) |
 # MAGIC | UC | `<target_catalog>` | `USE CATALOG` |
 # MAGIC | UC | `<target_catalog>.<target_schema>` | `USE SCHEMA` |
-# MAGIC | UC | `<target_catalog>.<target_schema>.{departments, kpi_submissions, monthly_reporting_userbase}` | `SELECT` |
+# MAGIC | UC | `<target_catalog>.<target_schema>.{departments, kpi_submissions, ...}` | `SELECT` |
 # MAGIC | Lakebase | `public` schema | `USAGE` |
 # MAGIC | Lakebase | `public.{departments, kpi_submissions, monthly_reporting_userbase}` | `SELECT, INSERT, UPDATE, DELETE` |
 # MAGIC | Lakebase | future tables in `public` | Same DML via `ALTER DEFAULT PRIVILEGES` |
@@ -421,25 +442,40 @@ print(f"App SP: {sp_client_id}")
 # Lakebase Postgres tables — these live in the `public` schema of the Lakebase DB
 # (created/seeded by notebook 01). Used for the Lakebase GRANTs further below.
 LAKEBASE_TABLES = ("departments", "kpi_submissions", "monthly_reporting_userbase")
-# Unity Catalog objects the app/Genie read = the synced views PLUS kpi_targets and the
-# kpi_metrics metric view (notebook 02). Genie needs SELECT on the metric view AND its
-# source tables or queries fail with PERMISSION_DENIED. NOTE: kpi_targets/kpi_metrics
-# are UC-only (they do NOT exist in Lakebase Postgres), so they're excluded from the
-# Lakebase grants.
-UC_TABLES = LAKEBASE_TABLES + ("kpi_targets", "kpi_metrics")
+# Unity Catalog objects the App SP needs SELECT on within TARGET_CATALOG.TARGET_SCHEMA:
+#   - The clean views (same names as LAKEBASE_TABLES) created by notebook 02 step 5
+#   - The lb_*_history raw CDC tables Lakebase CDF creates — Genie resolves views to
+#     their underlying sources and checks permissions on those too
+#   - kpi_targets and kpi_metrics (UC-only, created by notebook 02 step 6)
+UC_TABLES = (
+    "departments", "kpi_submissions", "monthly_reporting_userbase",
+    "lb_departments_history", "lb_kpi_submissions_history", "lb_monthly_reporting_userbase_history",
+    "kpi_targets", "kpi_metrics",
+)
 
 # --- Unity Catalog grants (so Genie can read the synced Delta views) ---
+# USE_CATALOG requires MANAGE on the catalog, which the notebook runner may not
+# have on a shared catalog — report and continue instead of aborting the deploy.
 print(f"\nGranting Unity Catalog access on {TARGET_CATALOG}.{TARGET_SCHEMA}...")
-w.grants.update(
-    securable_type="catalog",
-    full_name=TARGET_CATALOG,
-    changes=[PermissionsChange(principal=sp_client_id, add=[Privilege.USE_CATALOG])],
-)
-w.grants.update(
-    securable_type="schema",
-    full_name=f"{TARGET_CATALOG}.{TARGET_SCHEMA}",
-    changes=[PermissionsChange(principal=sp_client_id, add=[Privilege.USE_SCHEMA])],
-)
+try:
+    w.grants.update(
+        securable_type="catalog",
+        full_name=TARGET_CATALOG,
+        changes=[PermissionsChange(principal=sp_client_id, add=[Privilege.USE_CATALOG])],
+    )
+    print(f"  USE_CATALOG on {TARGET_CATALOG}")
+except Exception as e:
+    print(f"  USE_CATALOG skipped (requires MANAGE on the catalog — grant manually if needed): {e}")
+
+try:
+    w.grants.update(
+        securable_type="schema",
+        full_name=f"{TARGET_CATALOG}.{TARGET_SCHEMA}",
+        changes=[PermissionsChange(principal=sp_client_id, add=[Privilege.USE_SCHEMA])],
+    )
+    print(f"  USE_SCHEMA on {TARGET_CATALOG}.{TARGET_SCHEMA}")
+except Exception as e:
+    print(f"  USE_SCHEMA skipped: {e}")
 for tbl in UC_TABLES:
     full = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{tbl}"
     try:
@@ -483,6 +519,194 @@ with psycopg.connect(conn_string) as conn:
 
 print("\nGrants applied — the App SP can now read UC views and read/write Lakebase tables.")
 
+# --- SQL warehouse grant (so the App SP can run Genie queries) ---
+# The Genie Space executes its generated SQL on a warehouse. Without CAN_USE on
+# that warehouse the App's Genie calls fail with PermissionDenied.
+if GENIE_WAREHOUSE_ID:
+    from databricks.sdk.service.sql import WarehouseAccessControlRequest, WarehousePermissionLevel
+
+    print(f"\nGranting CAN_USE on SQL warehouse {GENIE_WAREHOUSE_ID} to App SP {sp_client_id}...")
+    try:
+        # update_permissions patches the ACL. (set_permissions would *replace* it,
+        # revoking everyone else's access to what is usually a shared warehouse.)
+        w.warehouses.update_permissions(
+            warehouse_id=GENIE_WAREHOUSE_ID,
+            access_control_list=[
+                WarehouseAccessControlRequest(
+                    service_principal_name=sp_client_id,
+                    permission_level=WarehousePermissionLevel.CAN_USE,
+                ),
+            ],
+        )
+        print(f"  CAN_USE on warehouse {GENIE_WAREHOUSE_ID} — Genie queries will now work.")
+    except Exception as e:
+        print(f"  Warehouse grant skipped (grant manually if needed): {e}")
+else:
+    print("\nSkipping warehouse grant — the genie_warehouse_id widget is blank.")
+    print("  If Genie queries fail with PermissionDenied, set it and re-run this cell.")
+
+# --- Genie Space grant (so the App SP can call the Conversation API) ---
+# Without CAN_RUN on the Space, every w.genie.start_conversation / create_message
+# call from the App's SP returns MessageStatus.FAILED — even though UC and the
+# warehouse are correctly granted.  The UI works because you're logged in as yourself;
+# the App runs as its service principal, which needs its own space-level permission.
+from databricks.sdk.service.iam import AccessControlRequest, PermissionLevel
+
+print(f"\nGranting CAN_RUN on Genie Space {GENIE_SPACE_ID} to App SP {sp_client_id}...")
+try:
+    w.permissions.update(
+        request_object_type="genie-rooms",
+        request_object_id=GENIE_SPACE_ID,
+        access_control_list=[
+            AccessControlRequest(
+                service_principal_name=sp_client_id,
+                permission_level=PermissionLevel.CAN_RUN,
+            ),
+        ],
+    )
+    print(f"  CAN_RUN on genie-rooms/{GENIE_SPACE_ID} — App SP can now call the Conversation API.")
+except Exception as e:
+    print(f"  Genie Space grant skipped (grant manually if needed): {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 3c — Create the AI/BI Dashboard (SDK)
+# MAGIC
+# MAGIC Creates an embedded analytics dashboard over the Delta views from notebook 02.
+# MAGIC Step 4 picks up the dashboard ID automatically and writes it into `app.yml`, so
+# MAGIC the app's Analytics tab works with no manual configuration.
+# MAGIC
+# MAGIC **Prerequisite:** notebook 02 must have finished (the Delta views must exist).
+# MAGIC
+# MAGIC Set the `aibi_dashboard_id` widget to an existing dashboard ID to update that
+# MAGIC dashboard in place instead of creating a new one.
+
+# COMMAND ----------
+
+from databricks.sdk.errors import NotFound as _NotFound
+from databricks.sdk.service.dashboards import Dashboard as _Dashboard
+
+
+def _build_dashboard_payload(catalog: str, schema: str) -> str:
+    """Build the Lakeview serialized_dashboard JSON.
+
+    Data-driven: charts group by whatever `kpi_name` values are present, so this
+    works unchanged for any set of KPIs defined in notebook 01.
+    """
+    tbl = f"`{catalog}`.`{schema}`.kpi_submissions"
+    dashboard = {
+      "datasets": [
+        {"name": "ds_summary", "displayName": "Summary KPIs", "queryLines": [
+            "SELECT COUNT(*) AS total_submissions, ",
+            "COUNT(CASE WHEN kpi_lockin THEN 1 END) AS locked_submissions, ",
+            "COUNT(DISTINCT department_name) AS active_departments, ",
+            "COUNT(DISTINCT period) AS periods ",
+            f"FROM {tbl} "]},
+        {"name": "ds_period_trend", "displayName": "Justification Rate by Period", "queryLines": [
+            "SELECT period, period_start, COUNT(*) AS total, ",
+            "COUNT(CASE WHEN kpi_lockin THEN 1 END) AS locked, ",
+            "ROUND(COUNT(CASE WHEN kpi_lockin THEN 1 END)*100.0/COUNT(*),1) AS lock_pct, ",
+            "COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END) AS justified, ",
+            "ROUND(COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END)*100.0/COUNT(*),1) AS justify_pct ",
+            f"FROM {tbl} GROUP BY period, period_start ORDER BY period_start "]},
+        {"name": "ds_kpi1_by_region", "displayName": "Primary KPI by Region", "queryLines": [
+            "SELECT department_name, period, period_start, ROUND(AVG(kpi_value),2) AS avg_value ",
+            f"FROM {tbl} WHERE kpi_number=1 ",
+            "AND period_start>=add_months(current_date(),-10) ",
+            "GROUP BY department_name, period, period_start ORDER BY period_start, department_name "]},
+        {"name": "ds_justify_status", "displayName": "Justification Status Recent Periods", "queryLines": [
+            "SELECT department_name, period, period_start, COUNT(*) AS total_kpis, ",
+            "COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END) AS justified_kpis, ",
+            "ROUND(COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END)*100.0/COUNT(*),0) AS justify_pct ",
+            f"FROM {tbl} WHERE period IN (SELECT period FROM (SELECT period, MIN(period_start) AS ps FROM {tbl} GROUP BY period ORDER BY ps DESC LIMIT 4)) ",
+            "GROUP BY department_name, period, period_start ORDER BY period_start, department_name "]},
+        {"name": "ds_kpi_trends", "displayName": "All KPI Trends", "queryLines": [
+            "SELECT kpi_name, period, period_start, ROUND(AVG(kpi_value),2) AS avg_value ",
+            f"FROM {tbl} GROUP BY kpi_name, period, period_start ORDER BY kpi_name, period_start "]},
+        {"name": "ds_sentiment", "displayName": "Sentiment Distribution", "queryLines": [
+            f"SELECT sentiment_tags, COUNT(*) AS cnt FROM {tbl} ",
+            "WHERE sentiment_tags!='' GROUP BY sentiment_tags ORDER BY cnt DESC "]},
+        {"name": "ds_detail", "displayName": "KPI Detail", "queryLines": [
+            "SELECT department_name, kpi_name, period, period_start, kpi_value, kpi_unit, ",
+            "sentiment_tags, kpi_lockin, ",
+            "CASE WHEN key_drivers_quantitative!='' THEN 'Yes' ELSE 'No' END AS has_justification, ",
+            f"submitted_by FROM {tbl} ORDER BY period_start DESC, department_name, kpi_name "]},
+      ],
+      "pages": [
+        {"name": "overview", "displayName": "Overview", "pageType": "PAGE_TYPE_CANVAS", "layout": [
+            {"widget": {"name": "title", "multilineTextboxSpec": {"lines": ["## KPI Dashboard"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
+            {"widget": {"name": "subtitle", "multilineTextboxSpec": {"lines": ["Monthly KPI reporting — submission completeness, trends and justification status"]}}, "position": {"x": 0, "y": 1, "width": 6, "height": 1}},
+            {"widget": {"name": "kpi-total-submissions", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "total_submissions", "expression": "`total_submissions`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_submissions", "displayName": "Total Submissions"}}, "frame": {"showTitle": True, "title": "Total Submissions"}}}, "position": {"x": 0, "y": 2, "width": 2, "height": 3}},
+            {"widget": {"name": "kpi-locked", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "locked_submissions", "expression": "`locked_submissions`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "locked_submissions", "displayName": "Locked Submissions"}}, "frame": {"showTitle": True, "title": "Locked Submissions"}}}, "position": {"x": 2, "y": 2, "width": 2, "height": 3}},
+            {"widget": {"name": "kpi-departments", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "active_departments", "expression": "`active_departments`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "active_departments", "displayName": "Regions"}}, "frame": {"showTitle": True, "title": "Regions Reporting"}}}, "position": {"x": 4, "y": 2, "width": 2, "height": 3}},
+            {"widget": {"name": "section-justification", "multilineTextboxSpec": {"lines": ["### Justification Completion & Sentiment"]}}, "position": {"x": 0, "y": 5, "width": 6, "height": 1}},
+            {"widget": {"name": "chart-justify-trend", "queries": [{"name": "main_query", "query": {"datasetName": "ds_period_trend", "fields": [{"name": "period_start", "expression": "`period_start`"}, {"name": "justify_pct", "expression": "`justify_pct`"}, {"name": "lock_pct", "expression": "`lock_pct`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "period_start", "scale": {"type": "temporal"}, "displayName": "Period"}, "y": {"scale": {"type": "quantitative"}, "fields": [{"fieldName": "justify_pct", "displayName": "Justified (%)"}, {"fieldName": "lock_pct", "displayName": "Locked-In (%)"}]}}, "frame": {"showTitle": True, "title": "Justification & Lock-in Rate (%)"}}}, "position": {"x": 0, "y": 6, "width": 4, "height": 5}},
+            {"widget": {"name": "chart-sentiment", "queries": [{"name": "main_query", "query": {"datasetName": "ds_sentiment", "fields": [{"name": "sentiment_tags", "expression": "`sentiment_tags`"}, {"name": "cnt", "expression": "`cnt`"}], "disaggregated": False}}], "spec": {"version": 3, "widgetType": "pie", "encodings": {"angle": {"fieldName": "cnt", "scale": {"type": "quantitative"}, "displayName": "Count"}, "color": {"fieldName": "sentiment_tags", "scale": {"type": "categorical"}, "displayName": "Sentiment"}}, "frame": {"showTitle": True, "title": "Sentiment Distribution"}}}, "position": {"x": 4, "y": 6, "width": 2, "height": 5}},
+        ]},
+        {"name": "region-performance", "displayName": "Region Performance", "pageType": "PAGE_TYPE_CANVAS", "layout": [
+            {"widget": {"name": "region-title", "multilineTextboxSpec": {"lines": ["## Region Performance"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
+            {"widget": {"name": "region-subtitle", "multilineTextboxSpec": {"lines": ["Primary KPI trends and justification completion rates by region"]}}, "position": {"x": 0, "y": 1, "width": 6, "height": 1}},
+            {"widget": {"name": "chart-kpi1-region", "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpi1_by_region", "fields": [{"name": "period_start", "expression": "`period_start`"}, {"name": "avg_value", "expression": "`avg_value`"}, {"name": "department_name", "expression": "`department_name`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "period_start", "scale": {"type": "temporal"}, "displayName": "Period"}, "y": {"fieldName": "avg_value", "scale": {"type": "quantitative"}, "displayName": "Value"}, "color": {"fieldName": "department_name", "scale": {"type": "categorical"}, "displayName": "Region"}}, "frame": {"showTitle": True, "title": "Primary KPI by Region (last 10 months)"}}}, "position": {"x": 0, "y": 2, "width": 6, "height": 6}},
+            {"widget": {"name": "section-justify-status", "multilineTextboxSpec": {"lines": ["### Justification Completion — Recent Periods"]}}, "position": {"x": 0, "y": 8, "width": 6, "height": 1}},
+            {"widget": {"name": "chart-justify-by-region", "queries": [{"name": "main_query", "query": {"datasetName": "ds_justify_status", "fields": [{"name": "department_name", "expression": "`department_name`"}, {"name": "justify_pct", "expression": "`justify_pct`"}, {"name": "period", "expression": "`period`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "bar", "mark": {"layout": "group"}, "encodings": {"x": {"fieldName": "department_name", "scale": {"type": "categorical"}, "displayName": "Region"}, "y": {"fieldName": "justify_pct", "scale": {"type": "quantitative"}, "displayName": "Justified (%)"}, "color": {"fieldName": "period", "scale": {"type": "categorical"}, "displayName": "Period"}}, "frame": {"showTitle": True, "title": "Justification Completion % by Region"}}}, "position": {"x": 0, "y": 9, "width": 6, "height": 6}},
+        ]},
+        {"name": "kpi-trends", "displayName": "KPI Trends", "pageType": "PAGE_TYPE_CANVAS", "layout": [
+            {"widget": {"name": "trends-title", "multilineTextboxSpec": {"lines": ["## KPI Trends Over Time"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
+            {"widget": {"name": "trends-subtitle", "multilineTextboxSpec": {"lines": ["Average KPI values per month across all regions — grouped by KPI"]}}, "position": {"x": 0, "y": 1, "width": 6, "height": 1}},
+            {"widget": {"name": "chart-all-kpis", "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpi_trends", "fields": [{"name": "period_start", "expression": "`period_start`"}, {"name": "avg_value", "expression": "`avg_value`"}, {"name": "kpi_name", "expression": "`kpi_name`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "period_start", "scale": {"type": "temporal"}, "displayName": "Period"}, "y": {"fieldName": "avg_value", "scale": {"type": "quantitative"}, "displayName": "Avg Value"}, "color": {"fieldName": "kpi_name", "scale": {"type": "categorical"}, "displayName": "KPI"}}, "frame": {"showTitle": True, "title": "All KPI Trends (avg per period)"}}}, "position": {"x": 0, "y": 2, "width": 6, "height": 9}},
+        ]},
+        {"name": "detail", "displayName": "Detail", "pageType": "PAGE_TYPE_CANVAS", "layout": [
+            {"widget": {"name": "detail-title", "multilineTextboxSpec": {"lines": ["## KPI Submission Detail"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
+            {"widget": {"name": "filter-period", "queries": [{"name": "q_period", "query": {"datasetName": "ds_detail", "fields": [{"name": "period", "expression": "`period`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "period", "displayName": "Period", "queryName": "q_period"}]}, "frame": {"showTitle": True, "title": "Period"}}}, "position": {"x": 0, "y": 1, "width": 2, "height": 2}},
+            {"widget": {"name": "filter-dept", "queries": [{"name": "q_dept", "query": {"datasetName": "ds_detail", "fields": [{"name": "department_name", "expression": "`department_name`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "department_name", "displayName": "Region", "queryName": "q_dept"}]}, "frame": {"showTitle": True, "title": "Region"}}}, "position": {"x": 2, "y": 1, "width": 2, "height": 2}},
+            {"widget": {"name": "filter-kpi", "queries": [{"name": "q_kpi", "query": {"datasetName": "ds_detail", "fields": [{"name": "kpi_name", "expression": "`kpi_name`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "kpi_name", "displayName": "KPI", "queryName": "q_kpi"}]}, "frame": {"showTitle": True, "title": "KPI"}}}, "position": {"x": 4, "y": 1, "width": 2, "height": 2}},
+            {"widget": {"name": "table-detail", "queries": [{"name": "main_query", "query": {"datasetName": "ds_detail", "fields": [{"name": "period", "expression": "`period`"}, {"name": "department_name", "expression": "`department_name`"}, {"name": "kpi_name", "expression": "`kpi_name`"}, {"name": "kpi_value", "expression": "`kpi_value`"}, {"name": "kpi_unit", "expression": "`kpi_unit`"}, {"name": "sentiment_tags", "expression": "`sentiment_tags`"}, {"name": "has_justification", "expression": "`has_justification`"}, {"name": "kpi_lockin", "expression": "`kpi_lockin`"}, {"name": "submitted_by", "expression": "`submitted_by`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "period", "displayName": "Period"}, {"fieldName": "department_name", "displayName": "Region"}, {"fieldName": "kpi_name", "displayName": "KPI"}, {"fieldName": "kpi_value", "displayName": "Value"}, {"fieldName": "kpi_unit", "displayName": "Unit"}, {"fieldName": "sentiment_tags", "displayName": "Sentiment"}, {"fieldName": "has_justification", "displayName": "Justified"}, {"fieldName": "kpi_lockin", "displayName": "Locked"}, {"fieldName": "submitted_by", "displayName": "Submitted By"}]}, "frame": {"showTitle": True, "title": "KPI Submissions"}}}, "position": {"x": 0, "y": 3, "width": 6, "height": 8}},
+        ]},
+      ]
+    }
+    return json.dumps(dashboard)
+
+
+_DASHBOARD_NAME = "Bricks Co — KPI Analytics"
+_serialized = _build_dashboard_payload(TARGET_CATALOG, TARGET_SCHEMA)
+
+if AIBI_DASHBOARD_ID:
+    print(f"Updating existing dashboard {AIBI_DASHBOARD_ID} with the latest queries...")
+    try:
+        w.lakeview.update(
+            dashboard_id=AIBI_DASHBOARD_ID,
+            dashboard=_Dashboard(
+                display_name=_DASHBOARD_NAME,
+                serialized_dashboard=_serialized,
+            ),
+        )
+        w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True, warehouse_id=AIBI_WAREHOUSE_ID or None)
+        print(f"Dashboard updated and re-published: {AIBI_DASHBOARD_ID}")
+    except _NotFound:
+        print(f"Dashboard {AIBI_DASHBOARD_ID} not found (trashed?) — creating a new one.")
+        AIBI_DASHBOARD_ID = ""
+
+if not AIBI_DASHBOARD_ID:
+    _dash = w.lakeview.create(
+        dashboard=_Dashboard(
+            display_name=_DASHBOARD_NAME,
+            serialized_dashboard=_serialized,
+        )
+    )
+    AIBI_DASHBOARD_ID = _dash.dashboard_id
+    print(f"Created AI/BI dashboard: {AIBI_DASHBOARD_ID}")
+    print(f"View it: {w.config.host}/dashboardsv3/{AIBI_DASHBOARD_ID}")
+    print("Tip: paste this ID into the `aibi_dashboard_id` widget so future re-runs update it.")
+
+    # Publish with embedded credentials so the app's iframe renders without a login prompt.
+    # warehouse_id pins the SQL warehouse used to run dashboard queries in the embed;
+    # without it the published embed has no warehouse selected and every query fails.
+    w.lakeview.publish(dashboard_id=AIBI_DASHBOARD_ID, embed_credentials=True, warehouse_id=AIBI_WAREHOUSE_ID or None)
+    print(f"Published (embed_credentials=True): /embed/dashboardsv3/{AIBI_DASHBOARD_ID}/published")
+
+print(f"\nAI/BI Dashboard ID: {AIBI_DASHBOARD_ID}")
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -504,6 +728,8 @@ print("\nGrants applied — the App SP can now read UC views and read/write Lake
 # MAGIC |---|---|
 # MAGIC | `KPI_REPORTING_LAKEBASE_PROJECT` | widget literal |
 # MAGIC | `GENIE_SPACE_ID` | resource alias `genie_space` |
+# MAGIC | `KPI_REPORTING_AI_GATEWAY_URL` | derived from the workspace host |
+# MAGIC | `KPI_REPORTING_AIBI_DASHBOARD_ID` | Step 3c (or the `aibi_dashboard_id` widget) |
 # MAGIC | `KPI_REPORTING_CONFLUENCE_*` | widget literals (only when Confluence enabled) |
 # MAGIC | `KPI_REPORTING_CONFLUENCE_API_TOKEN` | resource alias `confluence_api_token` (only when Confluence enabled) |
 # MAGIC | `PGHOST` / `PGUSER` / `ENDPOINT_NAME` | auto-injected by the postgres resource |
@@ -546,9 +772,20 @@ def _esc(s):
     # YAML double-quoted scalar — escape backslashes and double quotes.
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+# OpenAI-compatible base URL for the app's agent features. The direct
+# serving-endpoints URL works on every cloud (AWS, Azure, GCP) without needing a
+# dedicated AI Gateway route configured first.
+_host = (w.config.host or "").strip().rstrip("/")
+if not _host.startswith("https://"):
+    _host = f"https://{_host}"
+_ai_gateway_url = f"{_host}/serving-endpoints"
+print(f"AI base URL: {_ai_gateway_url}")
+
 env_lines = [
     f"  - name: KPI_REPORTING_LAKEBASE_PROJECT\n    value: {_esc(LAKEBASE_PROJECT)}",
     "  - name: GENIE_SPACE_ID\n    valueFrom: genie_space",
+    f"  - name: KPI_REPORTING_AI_GATEWAY_URL\n    value: {_esc(_ai_gateway_url)}",
+    f"  - name: KPI_REPORTING_AIBI_DASHBOARD_ID\n    value: {_esc(AIBI_DASHBOARD_ID)}",
 ]
 if ENABLE_CONFLUENCE:
     env_lines.extend([

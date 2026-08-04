@@ -18,7 +18,7 @@ export function SummaryCards({ summary, isLoading }: SummaryCardsProps) {
       title: "Total KPI Entries",
       value: summary ? summary.total_entries.toLocaleString() : "—",
       icon: <ClipboardList className="h-4 w-4 text-muted-foreground" />,
-      description: "5 KPIs per CC per month",
+      description: "5 KPIs per region per month",
     },
     {
       title: "Filled In",
@@ -36,7 +36,7 @@ export function SummaryCards({ summary, isLoading }: SummaryCardsProps) {
       title: "Centers Reporting",
       value: summary ? summary.departments_reporting.toString() : "—",
       icon: <Building2 className="h-4 w-4 text-muted-foreground" />,
-      description: "CCs with at least one filled KPI",
+      description: "regions with at least one filled KPI",
     },
   ];
 

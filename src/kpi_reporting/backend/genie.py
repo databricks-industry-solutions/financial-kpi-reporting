@@ -40,21 +40,44 @@ class GenieClient:
         # until the message reaches COMPLETED (raising on FAILED/timeout); run them off
         # the event loop. We catch failures and surface them as a FAILED result rather
         # than a 500 — matching the previous client's graceful behavior.
+        conv_id_early: str | None = conversation_id
+        msg_id_early: str | None = None
         try:
             if conversation_id:
-                message = await asyncio.to_thread(
-                    genie.create_message_and_wait, self.space_id, conversation_id, content, _WAIT_TIMEOUT
+                waiter = await asyncio.to_thread(
+                    genie.create_message, self.space_id, conversation_id, content,
                 )
             else:
-                message = await asyncio.to_thread(
-                    genie.start_conversation_and_wait, self.space_id, content, _WAIT_TIMEOUT
+                waiter = await asyncio.to_thread(
+                    genie.start_conversation, self.space_id, content,
                 )
+            # Capture IDs from the initial response before blocking on the wait,
+            # so we can fetch the message's .error field on failure.
+            init = waiter.response
+            conv_id_early = init.conversation_id or conversation_id
+            msg_id_early = init.message_id
+
+            message = await asyncio.to_thread(waiter.result, timeout=_WAIT_TIMEOUT)
         except Exception as e:
-            logger.warning(f"Genie message did not complete: {type(e).__name__}: {e}")
+            # Fetch the raw message to surface Genie's own error text rather than
+            # the opaque SDK wrapper message ("failed to reach COMPLETED").
+            error_detail = str(e)
+            try:
+                if conv_id_early and msg_id_early:
+                    raw = await asyncio.to_thread(
+                        genie.get_message, self.space_id, conv_id_early, msg_id_early,
+                    )
+                    if raw.error:
+                        # raw.error is a MessageError dataclass; .error holds the string
+                        error_detail = raw.error.error or str(raw.error)
+            except Exception:
+                pass
+            logger.warning(f"Genie message did not complete: {type(e).__name__}: {error_detail}")
             return {
-                "conversation_id": conversation_id,
-                "message_id": None,
+                "conversation_id": conv_id_early,
+                "message_id": msg_id_early,
                 "status": "FAILED",
+                "error": error_detail,
                 "attachments": [],
             }
 

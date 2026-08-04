@@ -10,7 +10,7 @@
 # MAGIC | # | Step | Where it happens | Required? |
 # MAGIC |---|------|------------------|-----------|
 # MAGIC | 1 | **Provision Lakebase + seed data** | this notebook | yes |
-# MAGIC | 2 | **Activate Lakebase CDF** (Change Data Feed, formerly "Lakehouse Sync") | `notebooks/02_setup_forward_etl.py` + UI | yes (creates the Delta tables Genie reads) |
+# MAGIC | 2 | **Activate Lakebase CDF** (Change Data Feed, formerly "Lakehouse Sync") | `notebooks/02_setup_forward_etl.py` | yes (creates the Delta tables Genie reads) |
 # MAGIC | 3 | **Genie Space + Confluence + App deploy** | `notebooks/03_deploy_app.py` (guided checklist) | yes |
 # MAGIC
 # MAGIC > **Order matters**: Lakebase CDF (notebook 02) must run before the Genie
@@ -38,8 +38,8 @@
 # MAGIC `kpi_submissions` tables (matching the application's runtime schema),
 # MAGIC and seeds realistic synthetic data. Idempotent — safe to re-run.
 # MAGIC
-# MAGIC The widget below lets you change the project name if `kpi-reporting`
-# MAGIC is taken in your workspace.
+# MAGIC The widgets below let you change the project name if `kpi-reporting`
+# MAGIC is taken in your workspace, and add your own email to the userbase.
 
 # COMMAND ----------
 
@@ -74,6 +74,7 @@ w = WorkspaceClient()
 dbutils.widgets.text("lakebase_project", "kpi-reporting", "Lakebase project ID")
 dbutils.widgets.text("lakebase_display_name", "Financial KPI Reporting", "Lakebase display name")
 dbutils.widgets.text("suspend_after_minutes", "5", "Auto-suspend compute after N idle minutes (0 = never suspend)")
+dbutils.widgets.text("demo_user_email", "", "Your SSO email (added as a General Manager for the demo — leave blank to skip)")
 
 # COMMAND ----------
 
@@ -81,9 +82,11 @@ dbutils.widgets.text("suspend_after_minutes", "5", "Auto-suspend compute after N
 LAKEBASE_PROJECT_ID = dbutils.widgets.get("lakebase_project").strip()
 LAKEBASE_DISPLAY_NAME = dbutils.widgets.get("lakebase_display_name").strip()
 SUSPEND_AFTER_MINUTES = int(dbutils.widgets.get("suspend_after_minutes").strip() or "0")
+DEMO_USER_EMAIL = dbutils.widgets.get("demo_user_email").strip()
 print(f"Project ID:   {LAKEBASE_PROJECT_ID}")
 print(f"Display name: {LAKEBASE_DISPLAY_NAME}")
 print(f"Auto-suspend: {f'after {SUSPEND_AFTER_MINUTES} min idle' if SUSPEND_AFTER_MINUTES else 'never (always on)'}")
+print(f"Demo user:    {DEMO_USER_EMAIL or '(none — skipping userbase entry)'}")
 
 # COMMAND ----------
 
@@ -349,6 +352,22 @@ with psycopg.connect(conn_string) as conn:
             )
         print(f"Seeded {len(USERBASE)} userbase entries")
 
+        # Add the notebook runner's own identity as a General Manager so they can
+        # log into the deployed app and see the submission experience first-hand.
+        if DEMO_USER_EMAIL:
+            cur.execute(
+                """INSERT INTO monthly_reporting_userbase
+                       (employee_business_email, employee_name, department_name, operation_unit_code, job_name)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (employee_business_email) DO UPDATE SET
+                       employee_name = EXCLUDED.employee_name,
+                       department_name = EXCLUDED.department_name,
+                       operation_unit_code = EXCLUDED.operation_unit_code,
+                       job_name = EXCLUDED.job_name""",
+                (DEMO_USER_EMAIL, "Alex Morgan", "Region North", "REGN", "General Manager"),
+            )
+            print(f"Added demo user: {DEMO_USER_EMAIL} → Alex Morgan (General Manager, Region North)")
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -369,24 +388,47 @@ KPI_DEFINITIONS = [
     ("Free Cash Flow",   5, "Cash Flow",       4200000, "USD",  0.20),
 ]
 
-PERIODS = [
-    ("Jan 2025", "2025-01-01", "2025-01-31"),
-    ("Feb 2025", "2025-02-01", "2025-02-28"),
-    ("Mar 2025", "2025-03-01", "2025-03-31"),
-    ("Apr 2025", "2025-04-01", "2025-04-30"),
-    ("May 2025", "2025-05-01", "2025-05-31"),
-    ("Jun 2025", "2025-06-01", "2025-06-30"),
-    ("Jul 2025", "2025-07-01", "2025-07-31"),
-    ("Aug 2025", "2025-08-01", "2025-08-31"),
-    ("Sep 2025", "2025-09-01", "2025-09-30"),
-    ("Oct 2025", "2025-10-01", "2025-10-31"),
-    ("Nov 2025", "2025-11-01", "2025-11-30"),
-    ("Dec 2025", "2025-12-01", "2025-12-31"),
-    ("Jan 2026", "2026-01-01", "2026-01-31"),
-    ("Feb 2026", "2026-02-01", "2026-02-28"),  # in progress
-    ("Mar 2026", "2026-03-01", "2026-03-31"),  # in progress
-]
-HISTORICAL_PERIODS = {p[0] for p in PERIODS[:13]}
+import calendar
+from datetime import date
+
+# Build periods dynamically: Jan 2025 up to and including the current month.
+# Everything up to (but not including) the current month is treated as
+# historical/locked; the current month and the previous month are "in progress".
+_today = date.today()
+_start = date(2025, 1, 1)
+
+def _month_last_day(year: int, month: int) -> int:
+    return calendar.monthrange(year, month)[1]
+
+PERIODS = []
+_y, _m = _start.year, _start.month
+while (_y, _m) <= (_today.year, _today.month):
+    label = date(_y, _m, 1).strftime("%b %Y")
+    first = f"{_y}-{_m:02d}-01"
+    last  = f"{_y}-{_m:02d}-{_month_last_day(_y, _m):02d}"
+    PERIODS.append((label, first, last))
+    _m += 1
+    if _m > 12:
+        _m = 1
+        _y += 1
+
+# Label for the current and previous month — used to control fill state below.
+_current_month_label = _today.strftime("%b %Y")
+_prev_month = date(_today.year, _today.month, 1)
+_prev_month = date(
+    _prev_month.year - 1 if _prev_month.month == 1 else _prev_month.year,
+    12 if _prev_month.month == 1 else _prev_month.month - 1,
+    1,
+)
+_prev_month_label = _prev_month.strftime("%b %Y")
+
+# Historical = everything before the previous month (fully locked + justified).
+# Previous month = partially filled (in-progress demo).
+# Current month  = no fill at all (open, not started).
+HISTORICAL_PERIODS = {
+    p[0] for p in PERIODS
+    if p[0] not in (_prev_month_label, _current_month_label)
+}
 
 QUANT_DRIVERS = [
     "Revenue up 5.2% vs PY driven by volume growth across core segments",
@@ -483,18 +525,24 @@ records = []
 for dept_name, lead in DEPARTMENTS:
     for period_name, p_start, p_end in PERIODS:
         is_historical = period_name in HISTORICAL_PERIODS
-        # In-progress demo: Region North + Central, Feb 2026, first 3 KPIs filled
-        is_in_progress_filled = (
-            period_name == "Feb 2026"
+        # Previous month: Region North + Central have started filing (first 3 KPIs only).
+        is_prev_month_partial = (
+            period_name == _prev_month_label
             and dept_name in ("Region North", "Region Central")
         )
+        # Current month: nobody has filed anything yet.
+        is_current_month = period_name == _current_month_label
 
         for kpi_name, kpi_num, category, base, unit, var in KPI_DEFINITIONS:
             value = round(base * random.uniform(1 - var, 1 + var), 1)
             if unit == "days":
                 value = round(value)
 
-            kpi_filled = is_historical or (is_in_progress_filled and kpi_num <= 3)
+            kpi_filled = (
+                is_historical
+                or (is_prev_month_partial and kpi_num <= 3)
+                # is_current_month → always False (no fill)
+            )
 
             records.append({
                 "id": str(uuid.uuid4()),
@@ -546,15 +594,22 @@ INSERT INTO kpi_submissions (
     %(planned_actions)s, %(expected_impact)s, %(sentiment_tags)s,
     %(kpi_lockin)s, %(reviewed_by_gm)s, %(submitted_by)s
 )
-ON CONFLICT (department_id, kpi_number, period) DO NOTHING
 """
 
 with psycopg.connect(conn_string) as conn:
     conn.autocommit = True
     with conn.cursor() as cur:
+        # Truncate first so re-runs are fully idempotent — all KPI data is
+        # synthetic and regenerated above, so there is nothing worth keeping.
+        # RESTART IDENTITY resets any sequences; CASCADE covers the FK on
+        # kpi_submissions → departments (departments is truncated separately
+        # if needed, but kpi_submissions has no dependents so plain TRUNCATE
+        # is fine here).
+        cur.execute("TRUNCATE kpi_submissions")
+        print("Truncated kpi_submissions")
         for rec in records:
             cur.execute(INSERT_SQL, rec)
-        print(f"Inserted up to {len(records)} KPI submissions")
+        print(f"Inserted {len(records)} KPI submissions")
 
 # COMMAND ----------
 
@@ -610,7 +665,7 @@ displayHTML(f"""
 # MAGIC
 # MAGIC 1. Sets `REPLICA IDENTITY FULL` on the source tables (required for CDC)
 # MAGIC 2. Creates the destination schema in your chosen catalog
-# MAGIC 3. Renders the exact values to plug into the Lakebase CDF UI
+# MAGIC 3. Creates the Lakebase CDF configuration via the SDK (no UI steps needed)
 # MAGIC 4. Verifies sync activation and creates clean views the Genie Space reads
 # MAGIC
 # MAGIC When notebook 02 finishes you'll have these tables in Unity Catalog

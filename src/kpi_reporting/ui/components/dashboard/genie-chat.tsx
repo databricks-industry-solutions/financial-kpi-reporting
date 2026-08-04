@@ -20,7 +20,7 @@ const SAMPLE_QUESTIONS = [
   "Which region has the highest Operating Margin?",
   "Compare DSO across all regions for Dec 2025",
   "Show all planned actions for regions with Cautious sentiment",
-  "What external factors are reported by Region North?",
+  "What external factors are most commonly reported?",
   "Which KPIs mention supply chain in their key drivers?",
   "List internal factors for regions where OPEX Ratio exceeds 23%",
 ];
@@ -143,7 +143,9 @@ export function GenieChatPanel() {
           ? textParts.join("\n\n")
           : resp.status === "COMPLETED" || resp.status === "EXECUTING_QUERY"
             ? "Here are the results:"
-            : `Query ended with status: ${resp.status}`;
+            : resp.error
+              ? `Genie error: ${resp.error}`
+              : `Query ended with status: ${resp.status}`;
 
         setMessages((prev) => [
           ...prev,
