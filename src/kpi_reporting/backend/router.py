@@ -309,11 +309,14 @@ async def agent_justify(req: JustifyRequest, runtime: RuntimeDep, config: Config
         if s["kpi_name"] == submission["kpi_name"] and s["id"] != submission["id"]
     ]
 
-    # Prior periods: same region + KPI, last 3 months
+    # Prior periods: same region + KPI, chronologically before this period.
+    # Filter on period_start (a DATE) so future months are never treated as
+    # "prior" — the period label ("Jul 2025") is not chronologically sortable.
     all_dept = runtime.lakebase.get_submissions(department_id=submission["department_id"])
     prior_submissions = [
         s for s in all_dept
-        if s["kpi_name"] == submission["kpi_name"] and s["period"] != submission["period"]
+        if s["kpi_name"] == submission["kpi_name"]
+        and s["period_start"] < submission["period_start"]
     ]
 
     gateway_url = config.get_ai_gateway_url()

@@ -111,7 +111,9 @@ def _build_justify_prompt(
 
     # Format prior periods
     prior_lines = []
-    for p in sorted(prior_submissions, key=lambda x: x.get("period", ""), reverse=True)[:3]:
+    # Sort by period_start (a DATE), not the "Mon YYYY" label, so periods order
+    # chronologically — reverse gives the 3 most recent prior periods.
+    for p in sorted(prior_submissions, key=lambda x: x.get("period_start", ""), reverse=True)[:3]:
         v = p.get("kpi_value")
         if v is not None:
             prior_lines.append(f"  - {p['period']}: {v} {kpi_unit}")
