@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Validate Databricks Bundle
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build & Test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -43,7 +43,7 @@ jobs:
         run: pip install uv
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -70,7 +70,7 @@ jobs:
         run: uv run apx build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-${{ github.sha }}
           path: |
@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Dependency Vulnerability Scan
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -102,7 +102,7 @@ jobs:
           uv run pip-audit --strict --progress-spinner=off
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -127,7 +127,7 @@ jobs:
       matrix:
         language: ["python", "javascript-typescript"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -147,7 +147,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -160,7 +160,7 @@ jobs:
         run: pip install uv
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
