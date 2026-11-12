@@ -300,8 +300,9 @@ else:
 # MAGIC %md
 # MAGIC ## Step 6 — Governed KPI metric view (Unity Catalog)
 # MAGIC
-# MAGIC Define the KPIs once as a **Unity Catalog metric view** so Genie, AI/BI
-# MAGIC dashboards, and the app all share one governed definition. Ratios like
+# MAGIC Define the KPIs once as a **Unity Catalog metric view**. The Genie Space from
+# MAGIC notebook 03 answers KPI questions from it, and any AI/BI dashboard or notebook you
+# MAGIC build on it uses the same governed definition. Ratios like
 # MAGIC *Lock Rate* and *Avg Achievement* re-aggregate correctly at any grouping —
 # MAGIC which a plain view can't do. A tiny `kpi_targets` reference table supplies
 # MAGIC per-KPI targets (mirroring notebook 01's KPI definitions) so *Achievement*
@@ -340,7 +341,7 @@ else:
     # keep each line's indentation explicit rather than relying on code indentation.
     yaml_lines = [
         "version: 1.1",
-        'comment: "Governed financial KPI metrics — shared by Genie, dashboards, and the app"',
+        'comment: "Governed financial KPI metrics: one definition for each KPI measure"',
         f"source: {CATALOG}.{SCHEMA}.kpi_submissions",
         "joins:",
         "  - name: dept",
@@ -411,5 +412,5 @@ else:
 
     print(f"\nLakebase CDF setup complete in {CATALOG}.{SCHEMA}")
     print("Now run notebook 03 — its Genie Space points at the governed metric view + tables:")
-    for table in ("kpi_metrics", "departments", "kpi_submissions"):
+    for table in ("kpi_metrics", "departments", "kpi_submissions", "kpi_targets"):
         print(f"  - {CATALOG}.{SCHEMA}.{table}")

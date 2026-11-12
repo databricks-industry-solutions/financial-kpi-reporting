@@ -101,8 +101,9 @@ if ENABLE_CONFLUENCE:
 # MAGIC the Space for you — no manual UI clicks.
 # MAGIC
 # MAGIC **Before running:**
-# MAGIC - Notebook 02 must have finished — the Delta views must exist, since
-# MAGIC   `create_space` references them.
+# MAGIC - Notebook 02 must have finished — the Delta views, the `kpi_targets` table and
+# MAGIC   the `kpi_metrics` metric view must exist, since `create_space` references them.
+# MAGIC   Genie answers KPI questions from the metric view's governed measures.
 # MAGIC - Set the **`genie_warehouse_id`** widget to a SQL warehouse ID (Genie runs its
 # MAGIC   generated SQL on a warehouse; find one under **SQL Warehouses** in the UI).
 # MAGIC - Leave **`genie_space_id`** blank to create a new Space; if it's already set,
@@ -125,12 +126,21 @@ w = WorkspaceClient()
 GENIE_TABLES = [
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.departments",
     f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_submissions",   # row-level detail for drill-down questions
-    # kpi_metrics is intentionally excluded: it is a Unity Catalog metric view
-    # (CREATE VIEW … WITH METRICS) which requires MEASURE() syntax. Genie generates
-    # plain SQL and cannot use that syntax, causing every query to fail with
-    # MessageStatus.FAILED. kpi_submissions covers all the same analytical ground
-    # via standard GROUP BY aggregations.
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_targets",       # per-KPI targets (notebook 02, Step 6)
 ]
+
+# The governed KPI metric view (notebook 02, Step 6). Genie answers KPI questions
+# from its measures (Lock Rate, Avg Achievement, ...) with MEASURE(), so it uses the
+# same single definition of each KPI as anything else built on the metric view.
+GENIE_METRIC_VIEWS = [
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_metrics",
+]
+
+# The metric view is listed alongside the tables, which is also how get_space returns
+# it. create_space requires data_sources.tables sorted by identifier.
+GENIE_DATA_SOURCES = {
+    "tables": [{"identifier": t} for t in sorted(GENIE_TABLES + GENIE_METRIC_VIEWS)],
+}
 
 # System instructions that help Genie analyse the KPI data accurately. Edit freely;
 # this becomes one instruction block in the Space's Settings → Instructions.
@@ -139,23 +149,32 @@ GENIE_INSTRUCTIONS = [
     "performance analysis. Help executives understand KPI trends, regional ",
     "performance, and the key drivers behind results.\n\n",
     "Data model:\n",
+    "- `kpi_metrics` is the governed metric view with one definition for each KPI ",
+    "measure, such as Lock Rate and Avg Achievement. Use it for KPI aggregates.\n",
     "- Each row in `kpi_submissions` is one KPI (e.g. Revenue Growth, Operating ",
-    "Margin) for one region and one reporting period.\n",
+    "Margin) for one region and one reporting period. Use it for row-level detail.\n",
     "- `kpi_value` is the actual reported number; its unit is in `kpi_unit`.\n",
     "- `kpi_lockin = TRUE` means the regional lead locked and formally submitted the data.\n",
     "- `key_drivers_quantitative` / `key_drivers_qualitative` explain WHY the KPI landed where it did.\n",
-    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n\n",
+    "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n",
+    "- `kpi_targets` holds each KPI's target; `higher_is_better = FALSE` marks KPIs ",
+    "where lower is better (DSO, OPEX Ratio).\n\n",
     "Analysis guidance:\n",
     "- Focus on trends across months, regional comparisons, and achievement rates.\n",
     "- Highlight under- and over-performers, and use the key_drivers columns to ",
     "explain outliers rather than just reporting numbers.\n",
-    "- For achievement rate, compare `kpi_value` against these targets: ",
-    "Revenue Growth 8.5%, Operating Margin 14.0%, DSO 52 days (lower is better), ",
-    "OPEX Ratio 22.0% (lower is better), Free Cash Flow $4,200,000.",
+    "- For achievement against target, use the `Avg Achievement` measure in ",
+    "`kpi_metrics`. It already inverts the ratio for lower-is-better KPIs, so a value ",
+    "of about 1.0 (100%) means on target. Don't recompute it from `kpi_value`.",
 ]
 
 if GENIE_SPACE_ID:
     print(f"genie_space_id already set ({GENIE_SPACE_ID}) — skipping creation, reusing it.")
+    print(
+        "  If this Space was created before the kpi_metrics metric view was added, add "
+        f"{GENIE_METRIC_VIEWS[0]} and {TARGET_CATALOG}.{TARGET_SCHEMA}.kpi_targets as data "
+        "sources in the Genie UI, or clear the widget to create a new Space."
+    )
 else:
     if not GENIE_WAREHOUSE_ID:
         raise ValueError(
@@ -167,8 +186,7 @@ else:
     # added by a follow-up update_space call (Step 1b below).
     serialized_space = json.dumps({
         "version": 2,
-        # create_space requires data_sources.tables sorted by identifier.
-        "data_sources": {"tables": [{"identifier": t} for t in sorted(GENIE_TABLES)]},
+        "data_sources": GENIE_DATA_SOURCES,
     })
     space = w.genie.create_space(
         warehouse_id=GENIE_WAREHOUSE_ID,
@@ -182,7 +200,7 @@ else:
     # Step 1b: attach the instructions. `content` must be an array of strings.
     serialized_with_instructions = json.dumps({
         "version": 2,
-        "data_sources": {"tables": [{"identifier": t} for t in sorted(GENIE_TABLES)]},
+        "data_sources": GENIE_DATA_SOURCES,
         "instructions": {"text_instructions": [{"id": uuid.uuid4().hex, "content": GENIE_INSTRUCTIONS}]},
     })
     w.genie.update_space(
@@ -202,9 +220,11 @@ else:
 # MAGIC
 # MAGIC 1. In the workspace sidebar open **Genie** → **New**
 # MAGIC 2. Name it `Financial KPI Reporting`
-# MAGIC 3. **Add tables** from the catalog/schema you chose in notebook 02:
+# MAGIC 3. **Add data sources** from the catalog/schema you chose in notebook 02:
+# MAGIC    - `<catalog>.<schema>.kpi_metrics` (the governed metric view)
 # MAGIC    - `<catalog>.<schema>.departments`
 # MAGIC    - `<catalog>.<schema>.kpi_submissions`
+# MAGIC    - `<catalog>.<schema>.kpi_targets`
 # MAGIC    (Leave `monthly_reporting_userbase` out — SSO mapping only, not useful for Q&A.)
 # MAGIC 4. Open **Settings → Instructions** and paste the guidance from the
 # MAGIC    `GENIE_INSTRUCTIONS` list in the cell above.
@@ -728,7 +748,7 @@ print(f"\nAI/BI Dashboard ID: {AIBI_DASHBOARD_ID}")
 # MAGIC |---|---|
 # MAGIC | `KPI_REPORTING_LAKEBASE_PROJECT` | widget literal |
 # MAGIC | `GENIE_SPACE_ID` | resource alias `genie_space` |
-# MAGIC | `KPI_REPORTING_AI_GATEWAY_URL` | derived from the workspace host |
+# MAGIC | `KPI_REPORTING_AI_GATEWAY_URL` | Unity Gateway URL, derived from the workspace host |
 # MAGIC | `KPI_REPORTING_AIBI_DASHBOARD_ID` | Step 3c (or the `aibi_dashboard_id` widget) |
 # MAGIC | `KPI_REPORTING_CONFLUENCE_*` | widget literals (only when Confluence enabled) |
 # MAGIC | `KPI_REPORTING_CONFLUENCE_API_TOKEN` | resource alias `confluence_api_token` (only when Confluence enabled) |
@@ -772,14 +792,14 @@ def _esc(s):
     # YAML double-quoted scalar — escape backslashes and double quotes.
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-# OpenAI-compatible base URL for the app's agent features. The direct
-# serving-endpoints URL works on every cloud (AWS, Azure, GCP) without needing a
-# dedicated AI Gateway route configured first.
+# Base URL for the app's agent features: Unity Gateway's OpenAI-compatible unified
+# API on the workspace host, so every model call is governed by Unity Catalog. Works
+# the same on every cloud (AWS, Azure, GCP).
 _host = (w.config.host or "").strip().rstrip("/")
 if not _host.startswith("https://"):
     _host = f"https://{_host}"
-_ai_gateway_url = f"{_host}/serving-endpoints"
-print(f"AI base URL: {_ai_gateway_url}")
+_ai_gateway_url = f"{_host}/ai-gateway/mlflow/v1"
+print(f"Unity Gateway URL: {_ai_gateway_url}")
 
 env_lines = [
     f"  - name: KPI_REPORTING_LAKEBASE_PROJECT\n    value: {_esc(LAKEBASE_PROJECT)}",
@@ -833,9 +853,12 @@ print(f"\nApp URL: {app_info.url}")
 # MAGIC
 # MAGIC 1. Open the App URL → SSO redirect → dashboard
 # MAGIC 2. Sidebar shows your name + role from the userbase
-# MAGIC 3. **Submission view** — pick a region/period, edit a justification, save, lock
+# MAGIC 3. **Submission view** — pick a region/period, click **AI Draft** on a justification
+# MAGIC    field (the draft streams in through Unity Gateway), edit it, save, lock
 # MAGIC 4. **Executive dashboard** → Genie chat. Try:
 # MAGIC    - *"Which region has the highest Operating Margin in Jan 2026?"*
+# MAGIC    - *"What is the lock rate by region?"* The SQL should use `MEASURE()` on the
+# MAGIC      `kpi_metrics` metric view
 # MAGIC    - SQL + result table comes back
 # MAGIC 5. **Publish to Confluence** on a submission — page appears under your parent page
 
@@ -854,6 +877,8 @@ print(f"\nApp URL: {app_info.url}")
 # MAGIC | Submission edits don't show up in Lakebase | The App SP doesn't have `INSERT/UPDATE/DELETE` on the Lakebase tables — re-run Step 3b to apply Lakebase grants. |
 # MAGIC | Genie chat returns *Genie Space not configured* | `GENIE_SPACE_ID` not set — confirm the resource alias is `genie_space` (Step 3) |
 # MAGIC | Genie Space shows no data | Lakebase CDF not active or tables not added to the Space — see notebook 02 + Step 1 |
+# MAGIC | Genie SQL never uses `MEASURE()` / the `kpi_metrics` metric view | The Space was created before the metric view was added. Add `kpi_metrics` and `kpi_targets` as data sources in the Genie UI, or clear the `genie_space_id` widget and re-run Step 1 |
+# MAGIC | AI Draft or risk report fails with `PERMISSION_DENIED` | The App SP can't query the Unity Gateway model service. It needs `EXECUTE` on `system.ai.claude-sonnet-5`, `USE CATALOG` on `system` and `USE SCHEMA` on `system.ai`. All account users have these by default, so check whether an admin removed them |
 # MAGIC | Publish-to-Confluence returns 401 | Wrong email/token — re-check Step 2 widgets + the secret stored in Step 2d |
 # MAGIC | Publish-to-Confluence returns 404 | Wrong space key or parent page ID — re-check Step 2b widgets |
 # MAGIC | `Source code path must be a valid workspace path` | Source path didn't get the `/Workspace/` prefix — your notebook may be older than the fix; re-run the bundle deploy and reload the notebook. |

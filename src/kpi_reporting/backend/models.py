@@ -237,7 +237,7 @@ class KpiForecast(BaseModel):
     kpi_name: str
     kpi_unit: str
     points: list[ForecastPoint]
-    insight: str      # 1-2 sentence Claude commentary
+    insight: str      # 1-sentence trend summary (rule-based, no LLM)
 
 
 class ForecastResponse(BaseModel):
