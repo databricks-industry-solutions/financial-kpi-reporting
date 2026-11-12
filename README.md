@@ -207,6 +207,7 @@ This repo pins **public registries** (PyPI for Python, the public npm registry f
   export UV_DEFAULT_INDEX=https://<your-mirror>/simple    # Python (uv)
   echo 'registry=https://<your-mirror>/' > .npmrc          # frontend (.npmrc is gitignored)
   ```
+- **Building behind a mirror:** `apx build` runs `uv sync` and `bun add` internally, which rewrite `uv.lock` and `bun.lock` to point at your mirror. Export `UV_FROZEN=1` so uv leaves `uv.lock` alone, and discard any `bun.lock` changes before committing (`git checkout bun.lock`).
 - **Re-locking** (`uv lock`) and a **clean `databricks bundle deploy` build** must *resolve* packages (Python build backend + npm), so run those from an environment with public PyPI / npm egress (or a fully-mirroring proxy) — not a network that can only reach a partial internal proxy.
 
 ## Maintainers
