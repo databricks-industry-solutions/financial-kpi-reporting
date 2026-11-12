@@ -383,7 +383,7 @@ async def agent_narrative(req: NarrativeRequest, runtime: RuntimeDep, config: Co
 @api.get("/forecast/kpi", response_model=ForecastResponse, operation_id="getKpiForecast")
 async def get_kpi_forecast(runtime: RuntimeDep):
     """
-    Return 3-month ahead forecasts for the main KPIs using linear regression + seasonality.
+    Return 3-month ahead forecasts for the main KPIs using a linear trend (OLS) with a ±8% band.
     Single DB query, no LLM call — sub-second response.
     """
     N_FORECAST = 3

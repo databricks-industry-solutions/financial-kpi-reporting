@@ -98,12 +98,21 @@ export function ForecastPanel() {
     staleTime: 1000 * 60 * 30, // 30 min — forecasts don't change often
   });
 
+  // The forecast months come from the data: the months after the latest reported period.
+  const forecastPeriods =
+    data?.data?.forecasts?.[0]?.points.filter((p) => p.is_forecast).map((p) => p.period) ?? [];
+  const forecastRange = forecastPeriods.length
+    ? `${forecastPeriods[0]}–${forecastPeriods[forecastPeriods.length - 1]}`
+    : "";
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <TrendingUp size={16} className="text-ac-blue" />
         <h2 className="text-lg font-semibold">3-Month KPI Forecast</h2>
-        <span className="text-xs text-muted-foreground ml-1">Powered by Claude · Aug–Oct 2026</span>
+        <span className="text-xs text-muted-foreground ml-1">
+          Linear trend{forecastRange ? ` · ${forecastRange}` : ""}
+        </span>
       </div>
 
       {isLoading && (
