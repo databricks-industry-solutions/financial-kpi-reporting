@@ -58,7 +58,7 @@ export function AchievementTrendChart({ submissions }: AchievementTrendChartProp
             borderRadius: "8px",
             fontSize: "12px",
           }}
-          formatter={(value: number) => [`${value}%`, "Avg Achievement"]}
+          formatter={(value) => [`${value}%`, "Avg Achievement"]}
         />
         <ReferenceLine y={90} stroke="var(--color-chart-2)" strokeDasharray="5 5" label={{ value: "90% target", position: "insideTopRight", fontSize: 10 }} />
         <Line
