@@ -12,7 +12,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "httpx>=0.28.0",
     # OpenAI-compatible client for the agent features (backend/agent.py), pointed
-    # at Databricks foundation-model serving endpoints.
+    # at Unity Gateway's OpenAI-compatible API.
     "openai>=1.60.0",
 ]
 

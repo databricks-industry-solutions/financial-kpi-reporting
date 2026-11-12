@@ -1,4 +1,4 @@
-"""Agentic capabilities backed by AI Gateway + Claude Sonnet.
+"""Agentic capabilities backed by Claude Sonnet, called through Unity Gateway.
 
 Two agents:
 1. JustificationAgent  — drafts a KPI justification field from data signals.
@@ -18,11 +18,19 @@ from openai import AsyncOpenAI
 from .logger import logger
 
 # ---------------------------------------------------------------------------
-# AI Gateway client
+# Unity Gateway client
 # ---------------------------------------------------------------------------
+# Every model call goes through Unity Gateway's OpenAI-compatible unified API
+# (https://<workspace-host>/ai-gateway/mlflow/v1), so access to the model and its
+# usage are governed in Unity Catalog. The model is addressed by its three-part
+# Unity Gateway model-service name. Databricks-hosted models already exist as model
+# services in `system.ai`; by default all account users have EXECUTE on them.
+#
+# Set KPI_REPORTING_AI_MODEL to use a different model service, for example one you
+# created with its own rate limits or guardrails.
 
-_DEFAULT_AI_GATEWAY_URL = ""  # Derived at runtime from DATABRICKS_HOST / DATABRICKS_ORG_ID via config.get_ai_gateway_url()
-_MODEL = "databricks-claude-sonnet-5"
+_DEFAULT_AI_GATEWAY_URL = ""  # Derived at runtime from DATABRICKS_HOST via config.get_ai_gateway_url()
+_MODEL = os.environ.get("KPI_REPORTING_AI_MODEL", "system.ai.claude-sonnet-5")
 
 
 def _get_ai_client(gateway_url: str | None = None) -> AsyncOpenAI:

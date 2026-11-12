@@ -321,7 +321,7 @@ async def agent_justify(req: JustifyRequest, runtime: RuntimeDep, config: Config
 
     gateway_url = config.get_ai_gateway_url()
     if not gateway_url:
-        raise HTTPException(status_code=503, detail="AI Gateway is not configured. Run notebook 03 to set up the AI Gateway URL.")
+        raise HTTPException(status_code=503, detail="Unity Gateway URL is not configured. Run notebook 03, or set the KPI_REPORTING_AI_GATEWAY_URL environment variable.")
 
     from .agent import stream_justification
     return StreamingResponse(
@@ -342,7 +342,7 @@ async def agent_narrative(req: NarrativeRequest, runtime: RuntimeDep, config: Co
 
     gateway_url = config.get_ai_gateway_url()
     if not gateway_url:
-        raise HTTPException(status_code=503, detail="AI Gateway is not configured. Run notebook 03 to set up the AI Gateway URL.")
+        raise HTTPException(status_code=503, detail="Unity Gateway URL is not configured. Run notebook 03, or set the KPI_REPORTING_AI_GATEWAY_URL environment variable.")
 
     departments = runtime.lakebase.get_departments()
     prompt = _build_narrative_prompt(req.period, departments, submissions)
@@ -837,7 +837,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
 
     gateway_url = config.get_ai_gateway_url()
     if not gateway_url:
-        raise HTTPException(status_code=503, detail="AI Gateway is not configured. Run notebook 03 to set up the AI Gateway URL, or set the KPI_REPORTING_AI_GATEWAY_URL environment variable.")
+        raise HTTPException(status_code=503, detail="Unity Gateway URL is not configured. Run notebook 03, or set the KPI_REPORTING_AI_GATEWAY_URL environment variable.")
 
     prompt = _build_risk_prompt(req.period, filled)
     client = _get_ai_client(gateway_url)

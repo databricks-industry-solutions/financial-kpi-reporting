@@ -16,25 +16,24 @@ if env_file.exists():
 
 
 def _derive_ai_gateway_url(databricks_host: str) -> str:
-    """Derive an OpenAI-compatible base URL from the Databricks workspace host.
+    """Derive the Unity Gateway base URL from the Databricks workspace host.
 
-    Uses the direct foundation-model serving endpoint URL, which works on all
-    clouds (AWS, Azure, GCP) without requiring a dedicated AI Gateway route:
+    Uses Unity Gateway's OpenAI-compatible unified API on the workspace host:
 
-        https://<workspace-host>/serving-endpoints
+        https://<workspace-host>/ai-gateway/mlflow/v1
 
-    Preferred over an AI Gateway subdomain URL because it needs no extra setup —
-    any workspace with foundation models enabled works immediately.
+    Model calls through this URL are governed by Unity Catalog, and it works the
+    same on every cloud with no extra setup.
 
     The KPI_REPORTING_AI_GATEWAY_URL env var (set by notebook 03) overrides this
-    entirely, so explicit AI Gateway routes still take precedence.
+    entirely.
     """
     host = (databricks_host or "").strip().rstrip("/")
     if not host:
         return ""
     if not host.startswith("https://"):
         host = f"https://{host}"
-    return f"{host}/serving-endpoints"
+    return f"{host}/ai-gateway/mlflow/v1"
 
 
 class AppConfig(BaseSettings):
@@ -62,20 +61,19 @@ class AppConfig(BaseSettings):
     genie_space_id: str = Field(default_factory=lambda: os.environ.get("GENIE_SPACE_ID", ""))
 
     # Databricks workspace host — auto-injected by Apps as DATABRICKS_HOST.
-    # Used to build deep links and to derive the AI Gateway URL.
+    # Used to build deep links and to derive the Unity Gateway URL.
     databricks_host: str = Field(default_factory=lambda: os.environ.get("DATABRICKS_HOST", ""))
 
     # OpenAI-compatible base URL for the agent features. When set explicitly (by
-    # notebook 03) this value is used as-is — it can be an AI Gateway route URL or
-    # a direct serving-endpoint URL. When blank it falls back to
-    # https://<DATABRICKS_HOST>/serving-endpoints, which works on all clouds.
+    # notebook 03) this value is used as-is. When blank it falls back to Unity
+    # Gateway's unified API at https://<DATABRICKS_HOST>/ai-gateway/mlflow/v1.
     ai_gateway_url: str = Field(default="")
 
     # AI/BI Dashboard ID — injected by notebook 03 after creating the dashboard.
     aibi_dashboard_id: str = Field(default="")
 
     def get_ai_gateway_url(self) -> str:
-        """Return the AI Gateway URL, deriving it from the workspace host if unset."""
+        """Return the Unity Gateway URL, deriving it from the workspace host if unset."""
         if self.ai_gateway_url:
             return self.ai_gateway_url
         return _derive_ai_gateway_url(self.databricks_host)

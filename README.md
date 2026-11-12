@@ -23,7 +23,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 
 ![Regional Lead home](docs/screenshots/01-gm-home.png)
 
-**AI-assisted justification draft** — the app calls a Databricks Foundation Model endpoint to draft narrative context from the raw numbers; the lead edits and approves before submitting.
+**AI-assisted justification draft** — the app calls Claude Sonnet on Databricks through Unity Gateway to draft narrative context from the raw numbers; the lead edits and approves before submitting.
 
 ![AI justification draft](docs/screenshots/02-ai-draft.png)
 
@@ -79,8 +79,9 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 | Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
 | Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
 | Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakebase CDF (Change Data Feed, formerly "Lakehouse Sync") |
-| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) shared by AI/BI dashboards and the app |
-| AI | Databricks Genie | Natural-language Q&A over the KPI data |
+| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) that Genie answers KPI questions from |
+| AI | Databricks Genie | Natural-language Q&A over the KPI data, using the governed metric view |
+| AI drafting | Claude Sonnet via Unity Gateway (`system.ai.claude-sonnet-5`) | Justification drafts, executive narrative and risk report; every model call is governed by Unity Catalog |
 | Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
 | Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
 | Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
@@ -89,6 +90,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 
 **Databricks workspace** must have:
 - **Apps**, **Lakebase**, and **Genie Spaces** enabled
+- **Unity Gateway** with the `system.ai.claude-sonnet-5` model service available in your region (used by the AI drafting features)
 - Your account: permission to create Unity Catalog schemas and Lakebase projects, and to create Apps + attach resources
 
 **Optional** (only if you want the publish-to-Confluence feature):
