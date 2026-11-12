@@ -41,11 +41,11 @@ function ForecastChart({ points, unit }: { points: { period: string; actual?: nu
             borderRadius: "8px",
             fontSize: "11px",
           }}
-          formatter={(value: number | number[], name: string) => {
-            if (name === "band" && Array.isArray(value)) return [`${value[0].toFixed(1)}–${value[1].toFixed(1)} ${unit}`, "Range"];
+          formatter={(value, name) => {
+            if (name === "band" && Array.isArray(value)) return [`${Number(value[0]).toFixed(1)}–${Number(value[1]).toFixed(1)} ${unit}`, "Range"];
             if (name === "actual") return [`${Number(value).toFixed(1)} ${unit}`, "Actual"];
             if (name === "mid") return [`${Number(value).toFixed(1)} ${unit}`, "Forecast (mid)"];
-            return [value, name];
+            return [value, name ?? ""];
           }}
         />
         {firstForecast && (
