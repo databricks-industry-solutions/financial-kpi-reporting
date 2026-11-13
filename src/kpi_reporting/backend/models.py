@@ -1,5 +1,5 @@
-from datetime import datetime
 from pydantic import BaseModel
+
 from .. import __version__
 
 
@@ -20,7 +20,7 @@ class CurrentUser(BaseModel):
     department_id: str | None = None
     operation_unit_code: str | None = None
     job_name: str | None = None
-    role: str = "viewer"  # "gm", "blm", "bc", "executive", "viewer"
+    role: str = "viewer"  # "pnl", "gm", "blm", "bc", "executive", "viewer"
     is_executive: bool = False
 
 
@@ -68,7 +68,7 @@ class TaskItem(BaseModel):
     description: str
     period: str
     status: str  # "pending" | "in_progress" | "done"
-    count: int | None = None          # generic count (GM: unjustified KPIs)
+    count: int | None = None          # P&L: KPIs left to submit; GM: KPIs left to approve
     total: int | None = None
     unlocked_count: int | None = None  # CFO: submissions not yet locked
     negative_count: int | None = None  # CFO: submissions with cautious/negative sentiment
@@ -220,25 +220,3 @@ class GenieAskResponse(BaseModel):
     status: str
     error: str | None = None  # Genie's own error text, present when status == "FAILED"
     attachments: list[GenieAttachment] = []
-
-
-# --- Forecasting ---
-
-class ForecastPoint(BaseModel):
-    period: str       # e.g. "Apr 2026"
-    actual: float | None = None
-    low: float | None = None
-    mid: float | None = None
-    high: float | None = None
-    is_forecast: bool = False
-
-
-class KpiForecast(BaseModel):
-    kpi_name: str
-    kpi_unit: str
-    points: list[ForecastPoint]
-    insight: str      # 1-sentence trend summary (rule-based, no LLM)
-
-
-class ForecastResponse(BaseModel):
-    forecasts: list[KpiForecast]

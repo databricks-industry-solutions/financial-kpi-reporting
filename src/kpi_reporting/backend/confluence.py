@@ -1,5 +1,6 @@
 """Confluence REST API client for publishing KPI reports."""
 import httpx
+
 from .logger import logger
 
 
@@ -17,7 +18,7 @@ class ConfluenceClient:
 
     def _build_kpi_page_html(self, submission: dict) -> str:
         locked_icon = "&#9989;" if submission.get("kpi_lockin") else "&#10060;"
-        gm = submission.get("reviewed_by_gm") or "Not yet reviewed"
+        gm = submission.get("reviewed_by_gm") or "Not yet approved"
 
         fields = [
             ("Key Drivers (Quantitative)", submission.get("key_drivers_quantitative", "")),
@@ -46,9 +47,9 @@ class ConfluenceClient:
             <tr><th>Field</th><th>Details</th></tr>
             <tr><td><strong>KPI</strong></td><td>{submission['kpi_name']} (#{submission.get('kpi_number', '')})</td></tr>
             {rows_html}
-            <tr><td><strong>Locked In</strong></td><td>{locked_icon}</td></tr>
-            <tr><td><strong>Reviewed by GM</strong></td><td>{gm}</td></tr>
-            <tr><td><strong>Submitted By</strong></td><td>{submission.get('submitted_by', '')}</td></tr>
+            <tr><td><strong>Submitted for review</strong></td><td>{locked_icon}</td></tr>
+            <tr><td><strong>Approved by GM</strong></td><td>{gm}</td></tr>
+            <tr><td><strong>Prepared by</strong></td><td>{submission.get('submitted_by', '')}</td></tr>
         </table>
         """
 
@@ -121,12 +122,12 @@ class ConfluenceClient:
             <tr><th>Metric</th><th>Value</th></tr>
             <tr><td>Total KPI Entries</td><td>{total}</td></tr>
             <tr><td>Filled In</td><td><strong>{filled}</strong> ({round(filled/total*100) if total else 0}%)</td></tr>
-            <tr><td>Locked In</td><td><strong>{locked}</strong></td></tr>
-            <tr><td>GM Reviewed</td><td><strong>{gm_reviewed}</strong></td></tr>
+            <tr><td>Submitted</td><td><strong>{locked}</strong></td></tr>
+            <tr><td>Approved by GM</td><td><strong>{gm_reviewed}</strong></td></tr>
         </table>
         <h3>KPI Details</h3>
         <table>
-            <tr><th>Period</th><th>KPI</th><th>Category</th><th>Filled</th><th>Locked</th><th>GM Review</th><th>Sentiment</th></tr>
+            <tr><th>Period</th><th>KPI</th><th>Category</th><th>Filled</th><th>Submitted</th><th>GM Review</th><th>Sentiment</th></tr>
             {rows_html}
         </table>
         """
@@ -159,13 +160,13 @@ class ConfluenceClient:
             <tr><th>Metric</th><th>Value</th></tr>
             <tr><td>Total KPI Entries</td><td>{summary['total_entries']}</td></tr>
             <tr><td>Filled In</td><td><strong>{summary['filled_entries']}</strong></td></tr>
-            <tr><td>Locked In</td><td>{summary['locked_entries']}</td></tr>
-            <tr><td>GM Reviewed</td><td>{summary['gm_reviewed_entries']}</td></tr>
+            <tr><td>Submitted</td><td>{summary['locked_entries']}</td></tr>
+            <tr><td>Approved by GM</td><td>{summary['gm_reviewed_entries']}</td></tr>
             <tr><td>Centers Reporting</td><td>{summary['departments_reporting']}</td></tr>
         </table>
         <h3>Region Overview</h3>
         <table>
-            <tr><th>Region</th><th>Lead</th><th>Total KPIs</th><th>Filled</th><th>Locked</th><th>Fill Rate</th></tr>
+            <tr><th>Region</th><th>Lead</th><th>Total KPIs</th><th>Filled</th><th>Submitted</th><th>Fill Rate</th></tr>
             {dept_rows}
         </table>
         """

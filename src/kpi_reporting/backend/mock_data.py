@@ -1,7 +1,7 @@
 """Mock data layer for local development without Lakebase."""
 
-from datetime import datetime
 import random as _random
+from datetime import datetime
 
 # ---- Regions ----
 
@@ -13,6 +13,17 @@ DEPARTMENTS = [
     {"id": "d1000001-0000-0000-0000-000000000005", "name": "Region Central", "lead_name": "Sofia Lopez", "created_at": "2025-01-01T00:00:00"},
     {"id": "d1000001-0000-0000-0000-000000000006", "name": "Region International", "lead_name": "Noah Schmidt", "created_at": "2025-01-01T00:00:00"},
 ]
+
+# P&L manager per region: prepares and submits the KPI justifications the region's GM
+# (lead_name above) reviews. Must match PNL_MANAGERS in notebooks/01_setup_lakebase.py.
+PNL_MANAGERS = {
+    "Region North": "Jordan Lee",
+    "Region South": "Maya Singh",
+    "Region East": "Lucas Romero",
+    "Region West": "Emma Fischer",
+    "Region Central": "Omar Haddad",
+    "Region International": "Hana Sato",
+}
 
 # ---- 5 Fixed KPIs ----
 
@@ -161,18 +172,21 @@ def _generate_historical():
                     "sentiment_tags": _RNG.choice(_SENTIMENT_TAGS),
                     "kpi_lockin": True,
                     "reviewed_by_gm": lead,
-                    "submitted_by": lead,
+                    "submitted_by": PNL_MANAGERS[dept_name],
                 })
     return rows
 
 
 def _generate_pending():
-    """Generate partially-filled submissions for Feb 2026 + Mar 2026."""
+    """Generate in-progress submissions for Feb 2026 + Mar 2026.
+
+    Feb 2026, Region North + Central: KPIs 1-2 submitted and awaiting GM review,
+    KPI 3 drafted but not submitted, KPIs 4-5 empty. Mar 2026: all empty.
+    """
     rows = []
     for dept in DEPARTMENTS:
         dept_id = dept["id"]
         dept_name = dept["name"]
-        lead = dept["lead_name"]
         for month in ["Feb 2026", "Mar 2026"]:
             for kpi_def in KPI_DEFINITIONS:
                 # Feb 2026: partially filled for North/Central, empty for others
@@ -182,6 +196,7 @@ def _generate_pending():
                     and dept_name in ("Region North", "Region Central")
                     and kpi_def["number"] <= 3  # first 3 KPIs filled
                 )
+                is_submitted = is_filled and kpi_def["number"] <= 2
                 base = kpi_def["base_value"]
                 var = kpi_def["variance"]
                 value = round(base * _RNG.uniform(1 - var, 1 + var), 1)
@@ -204,9 +219,9 @@ def _generate_pending():
                     "planned_actions": _RNG.choice(_PLANNED_ACTIONS) if is_filled else "",
                     "expected_impact": _RNG.choice(_EXPECTED_IMPACT) if is_filled else "",
                     "sentiment_tags": _RNG.choice(_SENTIMENT_TAGS) if is_filled else "",
-                    "kpi_lockin": False,
-                    "reviewed_by_gm": lead if is_filled else "",
-                    "submitted_by": lead,
+                    "kpi_lockin": is_submitted,
+                    "reviewed_by_gm": "",
+                    "submitted_by": PNL_MANAGERS[dept_name],
                 })
     return rows
 
@@ -355,7 +370,7 @@ class MockLakebaseClient:
         filled = sum(1 for s in subs if _is_filled(s))
         locked = sum(1 for s in subs if s["kpi_lockin"])
         gm_reviewed = sum(1 for s in subs if s["reviewed_by_gm"])
-        departments_reporting = len(set(s["department_id"] for s in subs if _is_filled(s)))
+        departments_reporting = len({s["department_id"] for s in subs if _is_filled(s)})
 
         return {
             "total_entries": total,

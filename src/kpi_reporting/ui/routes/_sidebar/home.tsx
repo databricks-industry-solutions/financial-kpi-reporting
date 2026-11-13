@@ -1,9 +1,9 @@
 /**
  * Home page — personalised welcome + tasks of the day.
- * Shown to both GM and CFO as their landing page.
+ * The landing page for every persona (P&L manager, GM and CFO).
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useDemoPersona, PERSONAS, type DemoPersonaId } from "@/lib/demo-persona";
+import { useDemoPersona, PERSONAS, PERSONA_ORDER, type DemoPersonaId } from "@/lib/demo-persona";
 import { useGetTasks } from "@/lib/api";
 import { CheckCircle2, Circle, Clock, ArrowRight, RefreshCw, Users, ShieldAlert, LayoutDashboard } from "lucide-react";
 
@@ -41,8 +41,7 @@ export default function HomePage() {
   const { persona, switchPersona } = useDemoPersona();
   const navigate = useNavigate();
 
-  const otherPersonaId: DemoPersonaId = persona.id === "gm" ? "cfo" : "gm";
-  const otherPersona = PERSONAS[otherPersonaId];
+  const otherPersonaIds = PERSONA_ORDER.filter((id) => id !== persona.id);
 
   const { data, isLoading, refetch } = useGetTasks({
     params: { persona: persona.id },
@@ -64,8 +63,8 @@ export default function HomePage() {
     }
   };
 
-  const handleSwitch = () => {
-    switchPersona(otherPersonaId);
+  const handleSwitch = (id: DemoPersonaId) => {
+    switchPersona(id);
     navigate({ to: "/" });
   };
 
@@ -88,16 +87,21 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Switch user button */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-2 shrink-0 mt-1"
-          onClick={handleSwitch}
-        >
-          <Users size={14} />
-          Log in as {otherPersona.name.split(" ")[0]}
-        </Button>
+        {/* Switch user buttons — one per other demo persona */}
+        <div className="flex flex-wrap justify-end gap-2 shrink-0 mt-1">
+          {otherPersonaIds.map((id) => (
+            <Button
+              key={id}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => handleSwitch(id)}
+            >
+              <Users size={14} />
+              Log in as {PERSONAS[id].name.split(" ")[0]}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {/* Task summary */}
@@ -151,11 +155,13 @@ export default function HomePage() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{task.description}</p>
 
-                    {/* GM bar: unjustified KPIs */}
+                    {/* P&L manager bar: submitted KPIs; GM bar: approved KPIs */}
                     {task.count != null && task.total != null && task.status !== "done" && (
                       <div className="mt-2 space-y-1">
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>{task.total - task.count} of {task.total} justified</span>
+                          <span>
+                            {task.total - task.count} of {task.total} {persona.id === "gm" ? "approved" : "submitted"}
+                          </span>
                           <span>{Math.round(((task.total - task.count) / task.total) * 100)}%</span>
                         </div>
                         <div className="h-1.5 rounded-full bg-muted overflow-hidden">
@@ -165,12 +171,12 @@ export default function HomePage() {
                       </div>
                     )}
 
-                    {/* CFO bars: locked + sentiment */}
+                    {/* CFO bars: submitted + sentiment */}
                     {task.unlocked_count != null && task.total != null && (
                       <div className="mt-2 space-y-1.5">
                         <div>
                           <div className="flex items-center justify-between text-xs text-muted-foreground mb-0.5">
-                            <span>Locked in</span>
+                            <span>Submitted</span>
                             <span>{task.total - task.unlocked_count}/{task.total}</span>
                           </div>
                           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
@@ -216,14 +222,15 @@ export default function HomePage() {
                       </div>
                     )}
 
-                    {/* GM fallback arrow (no actions) */}
+                    {/* Regional personas: link to their page (no actions) */}
                     {actions.length === 0 && task.status !== "done" && task.route && (
                       <Button
                         size="sm" variant="outline"
                         className="h-7 text-xs gap-1.5 mt-3"
                         onClick={() => handleTaskClick(task.route, task.period)}
                       >
-                        <ArrowRight size={11} /> Go to KPI Reporting
+                        <ArrowRight size={11} />
+                        {task.route === "/kpi-review" ? "Go to KPI Review" : "Go to KPI Reporting"}
                       </Button>
                     )}
                   </div>
@@ -242,9 +249,11 @@ export default function HomePage() {
         </CardHeader>
         <CardContent className="pb-4 pt-0">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            {persona.id === "gm"
-              ? "As General Manager, you can submit and manage KPI justifications for your region."
-              : "As Chief Financial Officer, you have read access to all KPI submissions across all regions and can generate executive reports."}
+            {persona.id === "pnl"
+              ? "As P&L Manager, you prepare the KPI justifications for your region and submit them for your General Manager's review."
+              : persona.id === "gm"
+                ? "As General Manager, you review the KPI justifications your P&L manager submits, and approve them or send them back."
+                : "As Chief Financial Officer, you have read access to all KPI submissions across all regions and can generate executive reports."}
           </p>
         </CardContent>
       </Card>

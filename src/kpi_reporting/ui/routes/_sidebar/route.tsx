@@ -1,7 +1,7 @@
 import SidebarLayout from "@/components/apx/sidebar-layout";
 import { createFileRoute, Link, useLocation } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { ClipboardList, LayoutDashboard, BarChart2, Home, ShieldAlert } from "lucide-react";
+import { ClipboardList, ClipboardCheck, LayoutDashboard, BarChart2, Home, ShieldAlert } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -21,13 +21,20 @@ const ALL_NAV_ITEMS = [
     label: "Home",
     icon: <Home size={16} />,
     match: (path: string) => path === "/" || path.startsWith("/home"),
-    personas: ["gm", "cfo"],
+    personas: ["pnl", "gm", "cfo"],
   },
   {
     to: "/kpi-submission",
     label: "KPI Reporting",
     icon: <ClipboardList size={16} />,
     match: (path: string) => path.startsWith("/kpi-submission"),
+    personas: ["pnl"],
+  },
+  {
+    to: "/kpi-review",
+    label: "KPI Review",
+    icon: <ClipboardCheck size={16} />,
+    match: (path: string) => path.startsWith("/kpi-review"),
     personas: ["gm"],
   },
   {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, BookOpen, Pencil, Lock, Unlock, UserCheck } from "lucide-react";
+import { ExternalLink, BookOpen, Pencil, Lock, UserCheck, ClipboardCheck, RotateCcw } from "lucide-react";
 import { JustifyButton } from "@/components/agent/justify-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   usePublishSubmissionsSummary, getSubmissionsKey, type SubmissionOut,
 } from "@/lib/api";
 import { usePersona } from "@/lib/persona";
+import { useDemoPersona } from "@/lib/demo-persona";
 
 const ALL = "__all__";
 
@@ -65,9 +66,22 @@ function isFilled(sub: SubmissionOut): boolean {
   );
 }
 
+/** Approved by the region's GM. */
+function isApproved(sub: SubmissionOut): boolean {
+  return !!sub.reviewed_by_gm;
+}
+
+/** Submitted (locked) by the P&L manager and waiting for the GM. */
+function isAwaitingReview(sub: SubmissionOut): boolean {
+  return sub.kpi_lockin && !sub.reviewed_by_gm;
+}
+
 function fillBadge(sub: SubmissionOut) {
+  if (isApproved(sub)) {
+    return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-500/30 text-xs gap-1"><UserCheck size={10} /> Approved</Badge>;
+  }
   if (sub.kpi_lockin) {
-    return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30 text-xs gap-1"><Lock size={10} /> Locked</Badge>;
+    return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30 text-xs gap-1"><Lock size={10} /> Submitted</Badge>;
   }
   if (isFilled(sub)) {
     return <Badge className="bg-green-500/20 text-green-600 border-green-500/30 text-xs">Filled</Badge>;
@@ -94,19 +108,26 @@ interface EditFormState {
   reviewed_by_gm: string;
 }
 
-export function KpiReviewTable() {
+/**
+ * The region's KPI table.
+ * - "submit" (P&L manager): draft justifications with AI help and submit them for review.
+ * - "review" (General Manager): approve submitted KPIs or send them back.
+ */
+export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
   const { data, isLoading } = useGetSubmissions();
   const queryClient = useQueryClient();
   const updateMutation = useUpdateSubmission();
   const publishMutation = usePublishToConfluence();
   const summaryMutation = usePublishSubmissionsSummary();
   const { persona } = usePersona();
+  // The demo persona acting in this view; its name is recorded on approvals.
+  const { persona: actingPersona } = useDemoPersona();
 
   const [filterPeriod, setFilterPeriod] = useState(ALL);
   const [filterKpi, setFilterKpi] = useState(ALL);
   const [filterStatus, setFilterStatus] = useState(ALL);
 
-  const [sheetMode, setSheetMode] = useState<"edit" | "detail" | null>(null);
+  const [sheetMode, setSheetMode] = useState<"edit" | "detail" | "review" | null>(null);
   const [selectedSubmission, setSelectedSubmission] = useState<SubmissionOut | null>(null);
   const [form, setForm] = useState<EditFormState>({
     key_drivers_quantitative: "",
@@ -136,7 +157,7 @@ export function KpiReviewTable() {
     return Array.from(set).sort();
   }, [allSubmissions]);
 
-  const STATUS_OPTIONS = ["Filled", "Empty", "Locked"];
+  const STATUS_OPTIONS = ["Empty", "Filled", "Submitted", "Approved"];
 
   const submissions = useMemo(() => {
     let result = allSubmissions;
@@ -144,7 +165,8 @@ export function KpiReviewTable() {
     if (filterKpi !== ALL) result = result.filter((s) => s.kpi_name === filterKpi);
     if (filterStatus !== ALL) {
       result = result.filter((s) => {
-        if (filterStatus === "Locked") return s.kpi_lockin;
+        if (filterStatus === "Approved") return isApproved(s);
+        if (filterStatus === "Submitted") return isAwaitingReview(s);
         if (filterStatus === "Filled") return !s.kpi_lockin && isFilled(s);
         return !s.kpi_lockin && !isFilled(s); // Empty
       });
@@ -180,21 +202,25 @@ export function KpiReviewTable() {
     setSheetMode("detail");
   };
 
+  const openReviewSheet = (sub: SubmissionOut, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedSubmission(sub);
+    setSheetMode("review");
+  };
+
   const closeSheet = () => {
     setSheetMode(null);
     setSelectedSubmission(null);
   };
 
-  const handleSave = () => {
+  /** Persist a change to the selected submission, then refresh the table. */
+  const saveSubmission = (data: Partial<EditFormState>, successMessage: string) => {
     if (!selectedSubmission) return;
     updateMutation.mutate(
-      {
-        params: { sub_id: selectedSubmission.id },
-        data: { ...form },
-      },
+      { params: { sub_id: selectedSubmission.id }, data },
       {
         onSuccess: () => {
-          toast.success("KPI updated successfully");
+          toast.success(successMessage);
           queryClient.invalidateQueries({ queryKey: getSubmissionsKey() });
           closeSheet();
         },
@@ -204,6 +230,19 @@ export function KpiReviewTable() {
       },
     );
   };
+
+  // P&L manager: save the draft, or submit it (locks it) for the GM's review.
+  const handleSave = (submit: boolean) =>
+    saveSubmission({ ...form, kpi_lockin: submit }, submit ? "Submitted for GM review" : "Draft saved");
+
+  // GM: approve, or send it back to the P&L manager (unlocks it for editing).
+  const handleApprove = () =>
+    saveSubmission({ reviewed_by_gm: actingPersona.name }, "KPI approved");
+  const handleSendBack = () =>
+    saveSubmission(
+      { kpi_lockin: false, reviewed_by_gm: "" },
+      `Sent back to ${selectedSubmission?.submitted_by || "the P&L manager"}`,
+    );
 
   const handlePublish = (subId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -261,6 +300,57 @@ export function KpiReviewTable() {
     { key: "planned_actions", label: "Planned Actions" },
     { key: "expected_impact", label: "Expected Impact" },
   ];
+
+  /** Read-only view of a submission, shared by the detail and review sheets. */
+  const renderDetails = (sub: SubmissionOut) => (
+    <>
+      {sub.kpi_value != null && (
+        <div className="text-2xl font-bold tabular-nums">
+          {formatKpiValue(sub.kpi_value, sub.kpi_unit)}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Badge variant="secondary" className="text-xs">{sub.kpi_category}</Badge>
+        {fillBadge(sub)}
+        {sub.sentiment_tags && (
+          <Badge variant="outline" className={`text-xs ${sentimentColor(sub.sentiment_tags)}`}>
+            {sub.sentiment_tags}
+          </Badge>
+        )}
+      </div>
+
+      {DETAIL_FIELDS.map((field) => {
+        const value = sub[field.key] as string;
+        return (
+          <div key={field.key}>
+            <span className="text-xs text-muted-foreground">{field.label}</span>
+            <p className="mt-0.5 text-sm leading-relaxed bg-muted/50 p-2.5 rounded-lg min-h-[2rem]">
+              {value || <span className="text-muted-foreground italic">Not provided</span>}
+            </p>
+          </div>
+        );
+      })}
+
+      <div className="grid grid-cols-2 gap-4 pt-2 text-sm">
+        <div>
+          <span className="text-xs text-muted-foreground">Submitted for review</span>
+          <p className="font-medium">{sub.kpi_lockin ? "Yes" : "No"}</p>
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Approved by GM</span>
+          <p className="font-medium">{sub.reviewed_by_gm || "Not yet"}</p>
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Prepared by</span>
+          <p className="font-medium">{sub.submitted_by}</p>
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Last Updated</span>
+          <p className="font-medium">{new Date(sub.updated_at).toLocaleDateString()}</p>
+        </div>
+      </div>
+    </>
+  );
 
   return (
     <>
@@ -366,20 +456,39 @@ export function KpiReviewTable() {
                       <span className="inline-flex items-center gap-1 text-xs text-green-600">
                         <UserCheck size={12} /> {sub.reviewed_by_gm.split(" ")[0]}
                       </span>
+                    ) : sub.kpi_lockin ? (
+                      <span className="text-xs text-amber-600">Awaiting</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </TableCell>
                   <TableCell>
-                    {!sub.kpi_lockin ? (
+                    {mode === "submit" ? (
+                      !sub.kpi_lockin ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => openEditSheet(sub, e)}
+                          className="text-xs h-7 gap-1"
+                        >
+                          <Pencil size={14} /> Edit
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {isApproved(sub) ? "Approved" : "In review"}
+                        </span>
+                      )
+                    ) : isAwaitingReview(sub) ? (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={(e) => openEditSheet(sub, e)}
+                        onClick={(e) => openReviewSheet(sub, e)}
                         className="text-xs h-7 gap-1"
                       >
-                        <Pencil size={14} /> Edit
+                        <ClipboardCheck size={14} /> Review
                       </Button>
+                    ) : !isApproved(sub) ? (
+                      <span className="text-xs text-muted-foreground">Not submitted</span>
                     ) : sub.confluence_page_url ? (
                       <a
                         href={sub.confluence_page_url}
@@ -409,8 +518,8 @@ export function KpiReviewTable() {
         </Table>
       </div>
 
-      {/* Publish Summary */}
-      {submissions.length > 0 && persona.deptName && (
+      {/* Publish Summary (the GM publishes the region's reviewed KPIs) */}
+      {mode === "review" && submissions.length > 0 && persona.deptName && (
         <div className="flex items-center justify-end px-1 pt-3">
           <Button
             variant="outline"
@@ -491,34 +600,23 @@ export function KpiReviewTable() {
                 </Select>
               </div>
 
-              <div className="flex items-center gap-4 pt-2">
+              <div className="flex gap-2 pt-4">
                 <Button
-                  variant={form.kpi_lockin ? "default" : "outline"}
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => updateField("kpi_lockin", !form.kpi_lockin)}
+                  variant="outline"
+                  onClick={() => handleSave(false)}
+                  disabled={updateMutation.isPending}
+                  className="flex-1"
                 >
-                  {form.kpi_lockin ? <Lock size={14} /> : <Unlock size={14} />}
-                  {form.kpi_lockin ? "Locked In" : "Lock In"}
+                  {updateMutation.isPending ? "Saving..." : "Save draft"}
                 </Button>
                 <Button
-                  variant={form.reviewed_by_gm ? "default" : "outline"}
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => updateField("reviewed_by_gm", form.reviewed_by_gm ? "" : persona.leadName)}
+                  onClick={() => handleSave(true)}
+                  disabled={updateMutation.isPending}
+                  className="flex-1 gap-1.5"
                 >
-                  <UserCheck size={14} />
-                  {form.reviewed_by_gm ? "GM Reviewed" : "Mark GM Reviewed"}
+                  <Lock size={14} /> Submit for review
                 </Button>
               </div>
-
-              <Button
-                onClick={handleSave}
-                disabled={updateMutation.isPending}
-                className="w-full mt-4"
-              >
-                {updateMutation.isPending ? "Saving..." : "Save Changes"}
-              </Button>
             </div>
           )}
         </SheetContent>
@@ -534,51 +632,39 @@ export function KpiReviewTable() {
             </SheetDescription>
           </SheetHeader>
           {selectedSubmission && (
+            <div className="mt-6 space-y-4">{renderDetails(selectedSubmission)}</div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* Review Sheet — the GM approves or sends back a submitted KPI */}
+      <Sheet open={sheetMode === "review"} onOpenChange={closeSheet}>
+        <SheetContent className="sm:max-w-lg overflow-auto">
+          <SheetHeader>
+            <SheetTitle>Review KPI — {selectedSubmission?.kpi_name}</SheetTitle>
+            <SheetDescription>
+              {selectedSubmission?.department_name} &middot; {selectedSubmission?.period} &middot; #{selectedSubmission?.kpi_number}
+            </SheetDescription>
+          </SheetHeader>
+          {selectedSubmission && (
             <div className="mt-6 space-y-4">
-              {selectedSubmission.kpi_value != null && (
-                <div className="text-2xl font-bold tabular-nums">
-                  {formatKpiValue(selectedSubmission.kpi_value, selectedSubmission.kpi_unit)}
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="text-xs">{selectedSubmission.kpi_category}</Badge>
-                {fillBadge(selectedSubmission)}
-                {selectedSubmission.sentiment_tags && (
-                  <Badge variant="outline" className={`text-xs ${sentimentColor(selectedSubmission.sentiment_tags)}`}>
-                    {selectedSubmission.sentiment_tags}
-                  </Badge>
-                )}
-              </div>
-
-              {DETAIL_FIELDS.map((field) => {
-                const value = selectedSubmission[field.key] as string;
-                return (
-                  <div key={field.key}>
-                    <span className="text-xs text-muted-foreground">{field.label}</span>
-                    <p className="mt-0.5 text-sm leading-relaxed bg-muted/50 p-2.5 rounded-lg min-h-[2rem]">
-                      {value || <span className="text-muted-foreground italic">Not provided</span>}
-                    </p>
-                  </div>
-                );
-              })}
-
-              <div className="grid grid-cols-2 gap-4 pt-2 text-sm">
-                <div>
-                  <span className="text-xs text-muted-foreground">Locked In</span>
-                  <p className="font-medium">{selectedSubmission.kpi_lockin ? "Yes" : "No"}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Reviewed by GM</span>
-                  <p className="font-medium">{selectedSubmission.reviewed_by_gm || "Not yet"}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Submitted By</span>
-                  <p className="font-medium">{selectedSubmission.submitted_by}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Last Updated</span>
-                  <p className="font-medium">{new Date(selectedSubmission.updated_at).toLocaleDateString()}</p>
-                </div>
+              {renderDetails(selectedSubmission)}
+              <div className="flex gap-2 pt-4">
+                <Button
+                  onClick={handleApprove}
+                  disabled={updateMutation.isPending}
+                  className="flex-1 gap-1.5"
+                >
+                  <UserCheck size={14} /> Approve
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleSendBack}
+                  disabled={updateMutation.isPending}
+                  className="flex-1 gap-1.5"
+                >
+                  <RotateCcw size={14} /> Send back
+                </Button>
               </div>
             </div>
           )}
