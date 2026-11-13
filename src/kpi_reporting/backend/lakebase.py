@@ -61,6 +61,7 @@ class LakebaseClient:
         self._pg_endpoint_name = pg_endpoint_name
         self._engine = None
         self._token_expires = 0
+        self._known_columns: set[tuple[str, str]] = set()
         self._ws = WorkspaceClient()
 
     def _get_oauth_password(self) -> str:
@@ -160,7 +161,28 @@ class LakebaseClient:
         rows = self.execute("SELECT * FROM kpi_submissions WHERE id = :id", {"id": sub_id})
         return rows[0] if rows else None
 
+    def _has_column(self, table: str, column: str) -> bool:
+        """Whether a column added after the first release exists yet.
+
+        Notebook 01 adds new columns on re-run; until then, the app keeps working
+        without them instead of failing every update.
+        """
+        if (table, column) in self._known_columns:
+            return True
+        rows = self.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c",
+            {"t": table, "c": column},
+        )
+        if rows:
+            self._known_columns.add((table, column))
+        else:
+            logger.warning(f"Column {table}.{column} does not exist yet; re-run notebook 01 to add it")
+        return bool(rows)
+
     def update_submission(self, sub_id: str, data: dict) -> dict | None:
+        if "sent_back_by" in data and not self._has_column("kpi_submissions", "sent_back_by"):
+            data = {k: v for k, v in data.items() if k != "sent_back_by"}
         sets = []
         params = {"id": sub_id}
         for key, value in data.items():

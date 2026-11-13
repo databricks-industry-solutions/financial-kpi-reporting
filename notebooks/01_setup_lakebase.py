@@ -284,6 +284,7 @@ with psycopg.connect(conn_string) as conn:
                 sentiment_tags VARCHAR(100) NOT NULL DEFAULT '',
                 kpi_lockin BOOLEAN NOT NULL DEFAULT FALSE,
                 reviewed_by_gm VARCHAR(200) NOT NULL DEFAULT '',
+                sent_back_by VARCHAR(200) NOT NULL DEFAULT '',
                 submitted_by VARCHAR(200) NOT NULL DEFAULT '',
                 submitted_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -293,6 +294,14 @@ with psycopg.connect(conn_string) as conn:
             )
         """)
         print("Created kpi_submissions table")
+
+        # Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+        # existing table untouched, so add them here to upgrade earlier deployments.
+        # sent_back_by: the GM who sent a KPI back to the P&L manager (cleared on resubmit).
+        cur.execute(
+            "ALTER TABLE kpi_submissions "
+            "ADD COLUMN IF NOT EXISTS sent_back_by VARCHAR(200) NOT NULL DEFAULT ''"
+        )
 
 # COMMAND ----------
 

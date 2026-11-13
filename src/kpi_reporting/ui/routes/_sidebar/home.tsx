@@ -3,9 +3,10 @@
  * The landing page for every persona (P&L manager, GM and CFO).
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useDemoPersona, PERSONAS, PERSONA_ORDER, type DemoPersonaId } from "@/lib/demo-persona";
+import { useDemoPersona } from "@/lib/demo-persona";
+import { PersonaSwitcher } from "@/components/persona-switcher";
 import { useGetTasks } from "@/lib/api";
-import { CheckCircle2, Circle, Clock, ArrowRight, RefreshCw, Users, ShieldAlert, LayoutDashboard } from "lucide-react";
+import { CheckCircle2, Circle, Clock, ArrowRight, RefreshCw, RotateCcw, ShieldAlert, LayoutDashboard } from "lucide-react";
 
 // TaskAction isn't in the generated types yet — augment locally
 interface TaskAction { label: string; route: string; variant: string; }
@@ -38,10 +39,8 @@ function getGreeting() {
 }
 
 export default function HomePage() {
-  const { persona, switchPersona } = useDemoPersona();
+  const { persona } = useDemoPersona();
   const navigate = useNavigate();
-
-  const otherPersonaIds = PERSONA_ORDER.filter((id) => id !== persona.id);
 
   const { data, isLoading, refetch } = useGetTasks({
     params: { persona: persona.id },
@@ -63,11 +62,6 @@ export default function HomePage() {
     }
   };
 
-  const handleSwitch = (id: DemoPersonaId) => {
-    switchPersona(id);
-    navigate({ to: "/" });
-  };
-
   return (
     <div className="flex flex-col flex-1 overflow-auto p-6 gap-6 max-w-3xl mx-auto w-full">
 
@@ -87,20 +81,9 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Switch user buttons — one per other demo persona */}
-        <div className="flex flex-wrap justify-end gap-2 shrink-0 mt-1">
-          {otherPersonaIds.map((id) => (
-            <Button
-              key={id}
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={() => handleSwitch(id)}
-            >
-              <Users size={14} />
-              Log in as {PERSONAS[id].name.split(" ")[0]}
-            </Button>
-          ))}
+        {/* Demo user switcher: name plus role for each persona */}
+        <div className="shrink-0 mt-1">
+          <PersonaSwitcher onSwitch={() => navigate({ to: "/" })} />
         </div>
       </div>
 
@@ -152,6 +135,11 @@ export default function HomePage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm text-foreground">{task.title}</span>
                       <StatusBadge status={task.status} />
+                      {task.sent_back_count != null && task.sent_back_count > 0 && (
+                        <Badge variant="outline" className="gap-1 text-orange-700 border-orange-300 bg-orange-50">
+                          <RotateCcw size={11} /> {task.sent_back_count} sent back
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{task.description}</p>
 

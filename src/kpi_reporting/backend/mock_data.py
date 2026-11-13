@@ -275,6 +275,7 @@ def _build_submissions():
             "sentiment_tags": row["sentiment_tags"],
             "kpi_lockin": row["kpi_lockin"],
             "reviewed_by_gm": row["reviewed_by_gm"],
+            "sent_back_by": "",
             "submitted_by": row["submitted_by"],
             "submitted_at": f"2025-01-15T{10 + (i % 12):02d}:00:00",
             "updated_at": f"2025-01-15T{10 + (i % 12):02d}:00:00",

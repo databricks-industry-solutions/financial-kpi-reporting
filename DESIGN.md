@@ -8,7 +8,7 @@ A web application that centralizes financial KPI reporting across global Regions
 
 | Persona | Role | What they do in the app |
 |---|---|---|
-| **P&L Manager** | Regional finance owner | Drafts each KPI's justification (with AI help) and submits it for review |
+| **P&L Manager** | Regional finance owner | Drafts each KPI's justification (with AI help), submits it for review, and revises KPIs the GM sends back |
 | **General Manager** | Regional business owner | Reviews the region's submitted KPIs, approves them or sends them back, and publishes results |
 | **Chief Financial Officer** | Executive oversight | Monitors performance across all regions, drills into underperforming areas, asks ad-hoc questions via AI |
 
@@ -18,7 +18,7 @@ A web application that centralizes financial KPI reporting across global Regions
 
 - P&L managers see their region's KPIs with targets pre-loaded for each reporting period
 - For each KPI, they enter the actual value and a written justification explaining the result
-- Submissions follow a simple lifecycle: **Draft** → **Submitted** (awaiting GM review) → **Approved** → **Published**. The GM can send a submission back to the P&L manager for changes
+- Submissions follow a simple lifecycle: **Draft** → **Submitted** (awaiting GM review) → **Approved** → **Published**. The GM can send a submission back to the P&L manager for changes; it is then flagged **Sent back** (with the GM's name) until the P&L manager resubmits it
 - Published KPIs are automatically pushed to Confluence as formal documentation
 
 ### 2. Executive Dashboard

@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   useGetSubmissions, useUpdateSubmission, usePublishToConfluence,
   usePublishSubmissionsSummary, getSubmissionsKey, type SubmissionOut,
+  type SubmissionUpdateRequest,
 } from "@/lib/api";
 import { usePersona } from "@/lib/persona";
 import { useDemoPersona } from "@/lib/demo-persona";
@@ -76,12 +77,20 @@ function isAwaitingReview(sub: SubmissionOut): boolean {
   return sub.kpi_lockin && !sub.reviewed_by_gm;
 }
 
+/** Sent back by the GM and not resubmitted yet. */
+function isSentBack(sub: SubmissionOut): boolean {
+  return !sub.kpi_lockin && !!sub.sent_back_by;
+}
+
 function fillBadge(sub: SubmissionOut) {
   if (isApproved(sub)) {
     return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-500/30 text-xs gap-1"><UserCheck size={10} /> Approved</Badge>;
   }
   if (sub.kpi_lockin) {
     return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30 text-xs gap-1"><Lock size={10} /> Submitted</Badge>;
+  }
+  if (isSentBack(sub)) {
+    return <Badge className="bg-orange-500/20 text-orange-700 border-orange-500/30 text-xs gap-1"><RotateCcw size={10} /> Sent back</Badge>;
   }
   if (isFilled(sub)) {
     return <Badge className="bg-green-500/20 text-green-600 border-green-500/30 text-xs">Filled</Badge>;
@@ -157,7 +166,7 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
     return Array.from(set).sort();
   }, [allSubmissions]);
 
-  const STATUS_OPTIONS = ["Empty", "Filled", "Submitted", "Approved"];
+  const STATUS_OPTIONS = ["Empty", "Filled", "Sent back", "Submitted", "Approved"];
 
   const submissions = useMemo(() => {
     let result = allSubmissions;
@@ -167,8 +176,9 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
       result = result.filter((s) => {
         if (filterStatus === "Approved") return isApproved(s);
         if (filterStatus === "Submitted") return isAwaitingReview(s);
-        if (filterStatus === "Filled") return !s.kpi_lockin && isFilled(s);
-        return !s.kpi_lockin && !isFilled(s); // Empty
+        if (filterStatus === "Sent back") return isSentBack(s);
+        if (filterStatus === "Filled") return !s.kpi_lockin && !isSentBack(s) && isFilled(s);
+        return !s.kpi_lockin && !isSentBack(s) && !isFilled(s); // Empty
       });
     }
     return result.sort((a, b) => {
@@ -214,7 +224,7 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
   };
 
   /** Persist a change to the selected submission, then refresh the table. */
-  const saveSubmission = (data: Partial<EditFormState>, successMessage: string) => {
+  const saveSubmission = (data: SubmissionUpdateRequest, successMessage: string) => {
     if (!selectedSubmission) return;
     updateMutation.mutate(
       { params: { sub_id: selectedSubmission.id }, data },
@@ -232,15 +242,23 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
   };
 
   // P&L manager: save the draft, or submit it (locks it) for the GM's review.
+  // Submitting also clears a send-back flag (the backend resets sent_back_by).
   const handleSave = (submit: boolean) =>
-    saveSubmission({ ...form, kpi_lockin: submit }, submit ? "Submitted for GM review" : "Draft saved");
+    saveSubmission(
+      { ...form, kpi_lockin: submit },
+      !submit
+        ? "Draft saved"
+        : selectedSubmission && isSentBack(selectedSubmission)
+          ? "Resubmitted for GM review"
+          : "Submitted for GM review",
+    );
 
   // GM: approve, or send it back to the P&L manager (unlocks it for editing).
   const handleApprove = () =>
     saveSubmission({ reviewed_by_gm: actingPersona.name }, "KPI approved");
   const handleSendBack = () =>
     saveSubmission(
-      { kpi_lockin: false, reviewed_by_gm: "" },
+      { kpi_lockin: false, reviewed_by_gm: "", sent_back_by: actingPersona.name },
       `Sent back to ${selectedSubmission?.submitted_by || "the P&L manager"}`,
     );
 
@@ -338,7 +356,9 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
         </div>
         <div>
           <span className="text-xs text-muted-foreground">Approved by GM</span>
-          <p className="font-medium">{sub.reviewed_by_gm || "Not yet"}</p>
+          <p className="font-medium">
+            {sub.reviewed_by_gm || (isSentBack(sub) ? `No, sent back by ${sub.sent_back_by}` : "Not yet")}
+          </p>
         </div>
         <div>
           <span className="text-xs text-muted-foreground">Prepared by</span>
@@ -458,6 +478,10 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
                       </span>
                     ) : sub.kpi_lockin ? (
                       <span className="text-xs text-amber-600">Awaiting</span>
+                    ) : isSentBack(sub) ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-orange-700">
+                        <RotateCcw size={12} /> {sub.sent_back_by?.split(" ")[0]}
+                      </span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
@@ -488,7 +512,9 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
                         <ClipboardCheck size={14} /> Review
                       </Button>
                     ) : !isApproved(sub) ? (
-                      <span className="text-xs text-muted-foreground">Not submitted</span>
+                      <span className="text-xs text-muted-foreground">
+                        {isSentBack(sub) ? "Sent back" : "Not submitted"}
+                      </span>
                     ) : sub.confluence_page_url ? (
                       <a
                         href={sub.confluence_page_url}
@@ -565,6 +591,15 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
           </SheetHeader>
           {selectedSubmission && (
             <div className="mt-6 space-y-4">
+              {isSentBack(selectedSubmission) && (
+                <div className="flex items-start gap-2 rounded-lg border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-800 dark:text-orange-300">
+                  <RotateCcw size={16} className="mt-0.5 shrink-0" />
+                  <p>
+                    <span className="font-medium">{selectedSubmission.sent_back_by} sent this KPI back.</span>{" "}
+                    Update the justification and submit it again for review.
+                  </p>
+                </div>
+              )}
               {EDITABLE_FIELDS.map((field) => (
                 <div key={field.key} className="space-y-1.5">
                   <Label htmlFor={field.key} className="text-xs font-medium">{field.label}</Label>
@@ -587,9 +622,9 @@ export function KpiReviewTable({ mode }: { mode: "submit" | "review" }) {
               ))}
 
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Sentiment</Label>
+                <Label htmlFor="sentiment_tags" className="text-xs font-medium">Sentiment</Label>
                 <Select value={form.sentiment_tags || "Neutral"} onValueChange={(v) => updateField("sentiment_tags", v)}>
-                  <SelectTrigger className="h-8 text-sm">
+                  <SelectTrigger id="sentiment_tags" className="h-8 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

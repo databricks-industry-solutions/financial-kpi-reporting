@@ -58,7 +58,7 @@ export const PERSONA_ORDER: DemoPersonaId[] = ["pnl", "gm", "cfo"];
 
 const STORAGE_KEY = "demo_persona";
 
-function isPersonaId(value: string | null): value is DemoPersonaId {
+export function isPersonaId(value: string | null): value is DemoPersonaId {
   return value === "pnl" || value === "gm" || value === "cfo";
 }
 

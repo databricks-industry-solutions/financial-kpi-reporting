@@ -132,6 +132,9 @@ async def get_submission(sub_id: str, runtime: RuntimeDep):
 @api.put("/submissions/{sub_id}", response_model=SubmissionOut, operation_id="updateSubmission")
 async def update_submission(sub_id: str, req: SubmissionUpdateRequest, runtime: RuntimeDep):
     data = {k: v for k, v in req.model_dump().items() if v is not None}
+    if data.get("kpi_lockin"):
+        # Submitting (again) clears the GM's send-back flag.
+        data["sent_back_by"] = ""
     row = runtime.lakebase.update_submission(sub_id, data)
     if not row:
         raise HTTPException(status_code=404, detail=f"Submission {sub_id} not found")
@@ -443,20 +446,28 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
                 # P&L manager: justify each KPI and submit it for GM review.
                 count = sum(1 for s in subs if not s.get("kpi_lockin") or not _is_justified(s))
                 awaiting = 0
+                sent_back = [s for s in subs if s.get("sent_back_by") and not s.get("kpi_lockin")]
                 title = f"Submit KPI justifications — {period}"
                 done_text = f"All {total} KPIs justified and submitted for review."
                 open_text = f"{count} of {total} KPIs still need a justification or submission."
+                if sent_back:
+                    n = len(sent_back)
+                    open_text = (f"{n} KPI{'s' if n != 1 else ''} sent back by "
+                                 f"{sent_back[0]['sent_back_by']} for changes · {open_text}")
                 route = "/kpi-submission"
             else:
                 # GM: review and approve what the P&L manager submitted.
                 count = sum(1 for s in subs if not s.get("reviewed_by_gm"))
                 awaiting = sum(1 for s in subs if s.get("kpi_lockin") and not s.get("reviewed_by_gm"))
-                not_submitted = count - awaiting
+                sent_back = [s for s in subs if s.get("sent_back_by") and not s.get("kpi_lockin")]
+                not_submitted = count - awaiting - len(sent_back)
                 title = f"Review KPI submissions — {period}"
                 done_text = f"All {total} KPIs reviewed and approved."
                 parts = []
                 if awaiting:
                     parts.append(f"{awaiting} KPI{'s' if awaiting != 1 else ''} awaiting your review")
+                if sent_back:
+                    parts.append(f"{len(sent_back)} sent back for changes")
                 if not_submitted:
                     parts.append(f"{not_submitted} not yet submitted by the P&L manager")
                 open_text = " · ".join(parts)
@@ -477,6 +488,7 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
                 status=status,
                 count=count,
                 total=total,
+                sent_back_count=len(sent_back) or None,
                 route=route,
             ))
 

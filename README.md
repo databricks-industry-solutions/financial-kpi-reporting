@@ -10,11 +10,11 @@ Three personas, one app:
 
 | Persona | What they do |
 |---|---|
-| **P&L Manager** (e.g. *Jordan Lee*) | Drafts the monthly KPI justifications for their region (with AI help) and submits them for review |
+| **P&L Manager** (e.g. *Jordan Lee*) | Drafts the monthly KPI justifications for their region (with AI help), submits them for review, and revises any KPI the GM sends back (flagged on the home page and in the KPI table) |
 | **General Manager** (e.g. *Alex Morgan*) | Reviews the region's submitted KPIs, then approves them or sends them back to the P&L manager |
 | **CFO** (e.g. *Sam Carter*) | Views consolidated dashboard, drills into underperforming regions, asks ad-hoc questions through embedded Genie, *(optionally)* publishes the executive summary to Confluence |
 
-Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across all months from **January 2025 up to and including the current month** — automatically, with no hardcoded dates. Historical months are submitted and approved. In the previous month, Region North and Central have submitted two KPIs that are waiting for GM review and drafted a third; the current month is open and not yet started. A demo switcher on the home page lets you act as the P&L manager, the GM or the CFO.
+Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across all months from **January 2025 up to and including the current month** — automatically, with no hardcoded dates. Historical months are submitted and approved. In the previous month, Region North and Central have submitted two KPIs that are waiting for GM review and drafted a third; the current month is open and not yet started. A **Switch user** dropdown on the home page lets you act as the P&L manager, the GM or the CFO.
 
 The Confluence publish-to-wiki feature is **off by default** — the app works without it. Flip the `enable_confluence` widget in notebook 03 to turn it on.
 
@@ -124,7 +124,7 @@ A troubleshooting matrix sits at the bottom of notebook 03 for the most common f
 
 > **Prefer a Git folder?** If running notebooks out of the bundle's deploy folder feels unnatural, you can instead clone this repo as a [Databricks Git folder](https://docs.databricks.com/repos/index.html) (**Workspace → Create → Git folder**) and run **notebooks 01 and 02** directly from there — they only need a configured workspace, not the built app. **But notebook 03's App-deploy step still requires `databricks bundle deploy`**: it deploys the App from the built `.build/` artifacts (wheel + bundled frontend), and `.build/` is a build output that is *not* committed to git (it's `.gitignore`d), so a Git-folder clone has it empty. In short: a Git folder is fine for reading/running the setup notebooks, but the `databricks bundle deploy` above is still the supported way to get the App's code into the workspace.
 
-> **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App.
+> **Operational note**: every time you run `databricks bundle deploy` from your laptop (e.g. after a code change), it overwrites the workspace `.build/app.yml` with your bare local one. After a bundle deploy you must re-run **Step 4** of notebook 03 — that cell regenerates `app.yml` from your widget values and redeploys the App. When upgrading an existing deployment to a version that adds columns (such as `sent_back_by`), re-run notebook 01 as well; it adds missing columns (and reseeds the synthetic data). Until then the app works without them.
 
 ## Local development
 

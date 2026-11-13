@@ -153,6 +153,7 @@ export interface SubmissionOut {
   period_start: string;
   planned_actions: string;
   reviewed_by_gm: string;
+  sent_back_by?: string;
   sentiment_tags: string;
   submitted_at: string;
   submitted_by: string;
@@ -169,6 +170,7 @@ export interface SubmissionUpdateRequest {
   oneoff_events?: string | null;
   planned_actions?: string | null;
   reviewed_by_gm?: string | null;
+  sent_back_by?: string | null;
   sentiment_tags?: string | null;
 }
 
@@ -186,6 +188,7 @@ export interface TaskItem {
   negative_count?: number | null;
   period: string;
   route?: string | null;
+  sent_back_count?: number | null;
   status: string;
   title: string;
   total?: number | null;
