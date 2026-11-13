@@ -1,6 +1,6 @@
 # Financial KPI Reporting
 
-A reference Databricks App for **governed monthly financial KPI reporting** across multiple business units or regions. Demonstrates an end-to-end pattern combining **Databricks Apps + Lakebase + Unity Catalog + Genie + (optionally) Confluence publishing** for a multi-unit enterprise.
+A reference Databricks App for **governed monthly financial KPI reporting** across multiple business units or regions. Demonstrates an end-to-end pattern combining **Databricks Apps + Lakebase + Unity Catalog + Genie + AI/BI dashboards + Unity Gateway + (optionally) Confluence publishing** for a multi-unit enterprise.
 
 > Built as a Field Engineering reference implementation. Synthetic data only — clone and customize for your own organization.
 
@@ -12,7 +12,7 @@ Three personas, one app:
 |---|---|
 | **P&L Manager** (e.g. *Jordan Lee*) | Drafts the monthly KPI justifications for their region (with AI help), submits them for review, and revises any KPI the GM sends back (flagged on the home page and in the KPI table) |
 | **General Manager** (e.g. *Alex Morgan*) | Reviews the region's submitted KPIs, then approves them or sends them back to the P&L manager |
-| **CFO** (e.g. *Sam Carter*) | Views consolidated dashboard, drills into underperforming regions, asks ad-hoc questions through embedded Genie, *(optionally)* publishes the executive summary to Confluence |
+| **CFO** (e.g. *Sam Carter*) | Views the consolidated overview and dashboard, drills into underperforming regions, asks ad-hoc questions through embedded Genie, generates an AI risk & sentiment report, *(optionally)* publishes the executive summary to Confluence |
 
 Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across all months from **January 2025 up to and including the current month** — automatically, with no hardcoded dates. Historical months are submitted and approved. In the previous month, Region North and Central have submitted two KPIs that are waiting for GM review and drafted a third; the current month is open and not yet started. A **Switch user** dropdown on the home page lets you act as the P&L manager, the GM or the CFO.
 
@@ -20,71 +20,74 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 
 ## Screenshots
 
-**P&L Manager: KPI Reporting** — submission table with status indicators; the P&L manager enters KPI actuals, writes AI-assisted justifications, and submits them for GM review.
+The images use the demo video's sample company, *ForgeBricks*, with eight customer centers; the reference app seeds *Bricks Co* with six regions, so names and numbers differ.
 
-![P&L Manager KPI Reporting](docs/screenshots/01-gm-home.png)
+**Architecture.** Everything runs inside the Databricks workspace under Unity Catalog. The app reads and writes Lakebase, which syncs continuously to Delta tables and metric views; Genie, Claude via Unity Gateway and the embedded AI/BI dashboard sit alongside, with optional intranet publishing. It deploys with Databricks Asset Bundles and APX.
 
-**AI-assisted justification draft** — the app calls Claude Sonnet on Databricks through Unity Gateway to draft narrative context from the raw numbers; the P&L manager edits the draft before submitting it.
+![Architecture](docs/screenshots/00-architecture.png)
+
+**P&L manager home.** Jordan, the P&L manager, signs in to exactly the KPIs that still need a justification.
+
+![P&L manager home](docs/screenshots/01-gm-home.png)
+
+**AI-assisted justification draft.** The app calls Claude Sonnet on Databricks through Unity Gateway to draft the justification from the actuals, peer regions and prior periods; the P&L manager edits the draft and submits it for GM review.
 
 ![AI justification draft](docs/screenshots/02-ai-draft.png)
 
-**CFO home** — consolidated overview across all regions: completion cards, lock-rate progress, and quick drill-in to underperformers.
+**CFO home.** The CFO sees only what needs reviewing: per-period submission progress, KPIs flagged with cautious or negative sentiment, and a shortcut to risk analysis.
 
 ![CFO home](docs/screenshots/03-cfo-home.png)
 
-**CFO dashboard** — embedded AI/BI dashboard with KPI trend charts, per-region breakdown, and achievement-vs-target waterfall.
+**Executive overview.** Fill rate, submissions and sentiment for every region on one page, with the Genie analyst below.
 
-![CFO dashboard](docs/screenshots/04-cfo-dashboard.png)
+![Executive overview](docs/screenshots/04-cfo-dashboard.png)
 
-**Genie analyst** — natural-language Q&A over KPI data, embedded in the CFO view; answers queries like *"Which region has the highest Operating Margin this quarter?"*
+**Genie analyst.** Natural-language Q&A over the governed KPI data, embedded in the CFO view, with the generated SQL one click away.
 
 ![Genie analyst](docs/screenshots/05-genie-analyst.png)
 
-**Risk & exceptions report** — CFO can flag underperforming regions, add commentary, and generate a risk summary page.
+**Risk & sentiment report.** Generated on demand for the CFO: top risks with evidence, recommended actions and an executive summary.
 
-![Risk report](docs/screenshots/06-risk-report.png)
+![Risk and sentiment report](docs/screenshots/06-risk-report.png)
 
-**Publish to Confluence** — one-click idempotent publish of the executive KPI summary to a Confluence Cloud page (optional feature).
+**Publish to the intranet.** One click publishes the report to the company wiki, a Confluence Cloud page in the reference app (optional feature; publishing is idempotent).
 
-![Publish to Confluence](docs/screenshots/07-publish-to-confluence.png)
-
-**Architecture diagram** — end-to-end component view.
-
-![Architecture](docs/screenshots/08-architecture.png)
+![Published to the intranet](docs/screenshots/07-publish-to-intranet.png)
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  React (TanStack Router) frontend — submission + dashboard   │
-└──────────────────────────────────────────────────────────────┘
-                               │ REST
-┌──────────────────────────────┴──────────────────────────────┐
-│  FastAPI backend (Databricks App)                            │
-└─────────────┬──────────────────┬──────────────────┬─────────┘
-              │                  │                  │
-┌─────────────┴──────────┐  ┌───┴─────────────┐  ┌─┴────────────┐
-│ Lakebase               │  │ Genie Space      │  │ Confluence   │
-│ (Postgres)             │  │ (NL → SQL)       │  │ REST API     │
-└──────────┬─────────────┘  └─────────────────┘  └─────────────┘
-           │ Lakebase CDF (CDC)
-┌──────────┴────────────┐
-│ Unity Catalog          │
-│ Delta tables           │
-└────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  React frontend (TanStack Router): reporting, review and CFO views     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ REST
+┌───────────────────────────────────┴────────────────────────────────────┐
+│  FastAPI backend (Databricks App)                                      │
+└──────┬─────────────────┬────────────────────┬───────────────────┬──────┘
+       │                 │                    │                   │
+┌──────┴──────┐  ┌───────┴───────┐  ┌─────────┴─────────┐  ┌──────┴──────┐
+│ Lakebase    │  │ Genie space   │  │ Unity Gateway     │  │ Confluence  │
+│ (Postgres)  │  │ (NL → SQL)    │  │ (Claude Sonnet)   │  │ (optional)  │
+└──────┬──────┘  └───────┬───────┘  └───────────────────┘  └─────────────┘
+       │ Lakebase CDF    │ reads
+┌──────┴─────────────────┴─────────────────────┐
+│ Unity Catalog: Delta views of the app's      │
+│ tables, the kpi_metrics metric view, and     │
+│ the AI/BI dashboard built on it              │
+└──────────────────────────────────────────────┘
 ```
 
 | Component | Tech | Purpose |
 |---|---|---|
 | Frontend | React 19, TanStack Router, Tailwind | Submission and review UI, executive overview, embedded AI/BI dashboard |
-| Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
+| Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Unity Gateway / Confluence integration |
 | Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
 | Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakebase CDF (Change Data Feed, formerly "Lakehouse Sync") |
-| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) that Genie answers KPI questions from |
+| Governed metrics | Unity Catalog metric view (`kpi_metrics`) | One governed KPI definition (Lock Rate, Avg Achievement, …) that both Genie and the AI/BI dashboard query |
 | AI | Databricks Genie | Natural-language Q&A over the KPI data, using the governed metric view |
+| Dashboards | Databricks AI/BI dashboard (created by notebook 03) | Embedded KPI trends, justification status and sentiment, built on the metric view |
 | AI drafting | Claude Sonnet via Unity Gateway (`system.ai.claude-sonnet-5`) | Justification drafts, executive narrative and risk report; every model call is governed by Unity Catalog |
 | Publishing | Confluence Cloud REST API | Idempotent page publishing per submission and per dashboard summary |
-| Reminders | Databricks SQL Alert / Job | Daily nudge for unjustified KPIs |
 | Build/Deploy | APX (FastAPI + React scaffolder), Databricks Asset Bundles | One-command bundle deploy |
 
 ## Prerequisites
