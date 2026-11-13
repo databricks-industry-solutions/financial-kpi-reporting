@@ -14,21 +14,28 @@ jobs:
   validate-bundle:
     runs-on: ubuntu-latest
     name: Validate Databricks Bundle
+    # Validation resolves the workspace user for the bundle root path, so it needs
+    # workspace credentials. Secrets are not available to Dependabot or fork PRs;
+    # skip the check there instead of failing it.
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
       # Bundles need the current Databricks CLI; the `databricks-cli` pip package is
       # the legacy CLI and has no `bundle` command.
       - name: Install Databricks CLI
+        if: env.DATABRICKS_TOKEN != ''
         uses: databricks/setup-cli@main
 
-      # Validation resolves the workspace user for the bundle root path, so it needs
-      # workspace credentials.
       - name: Validate bundle
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DEPLOY_NOTEBOOK_TOKEN }}
+        if: env.DATABRICKS_TOKEN != ''
         run: databricks bundle validate
+
+      - name: Skip (no workspace credentials)
+        if: env.DATABRICKS_TOKEN == ''
+        run: echo "::notice::DATABRICKS_HOST / DATABRICKS_TOKEN are not available to this run; skipped bundle validation."
 
   build-and-test:
     runs-on: ubuntu-latest
