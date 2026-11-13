@@ -8,14 +8,14 @@ Finance teams across multi-region enterprises struggle with **scattered, manual 
 
 A **governed, web-based KPI reporting platform** that combines structured submission workflows with AI-powered analytics and executive dashboards — all built on Databricks.
 
-### Two Personas, One Experience
+### Three Personas, One Experience
 
-| Regional Lead | Chief Financial Officer |
-|---|---|
-| ✓ Submit monthly KPIs with targets pre-loaded | ✓ View consolidated performance across all regions |
-| ✓ Provide justifications for actuals | ✓ Drill into underperforming areas in real-time |
-| ✓ Lock submissions once reviewed | ✓ Ask ad-hoc questions via AI (Genie) |
-| ✓ Track submission status | ✓ Publish executive summary to Confluence |
+| P&L Manager | General Manager | Chief Financial Officer |
+|---|---|---|
+| ✓ Submit monthly KPIs with targets pre-loaded | ✓ Review the region's submitted KPIs | ✓ View consolidated performance across all regions |
+| ✓ Draft justifications with AI help | ✓ Approve them or send them back | ✓ Drill into underperforming areas in real-time |
+| ✓ Submit for GM review | ✓ Publish the reviewed results | ✓ Ask ad-hoc questions via AI (Genie) |
+| ✓ Track submission status | | ✓ Publish executive summary to Confluence |
 
 ## Key Capabilities
 
@@ -23,7 +23,7 @@ A **governed, web-based KPI reporting platform** that combines structured submis
 - **Real-time executive dashboard** — Health score, regional performance, achievement trends, and drill-downs
 - **AI-powered analytics** — Databricks Genie translates natural-language questions into SQL queries over live KPI data
 - **Automated publishing** — Idempotent integration with Confluence for audit trail and stakeholder distribution
-- **Operational reminders** — Scheduled job nudges regional leads for unjustified KPIs
+- **Operational reminders** — Scheduled job nudges P&L managers for unjustified KPIs
 - **Transactional + analytical layers** — Lakebase for structured submissions, Unity Catalog Delta for Genie access
 
 ## Architecture
@@ -39,7 +39,7 @@ FastAPI Backend (Business Logic)
 ```
 
 **Tech Stack:**
-- **Frontend:** React 19, TanStack Router, Recharts, Tailwind
+- **Frontend:** React 19, TanStack Router, Tailwind
 - **Backend:** FastAPI, SQLAlchemy, Pydantic
 - **Data Layer:** Lakebase Autoscale (transactional), Delta + UC (analytical)
 - **AI:** Databricks Genie

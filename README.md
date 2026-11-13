@@ -6,24 +6,25 @@ A reference Databricks App for **governed monthly financial KPI reporting** acro
 
 ## What it does
 
-Two personas, one app:
+Three personas, one app:
 
 | Persona | What they do |
 |---|---|
-| **Regional Lead** (e.g. *Alex Morgan*) | Submits monthly KPI actuals + qualitative justifications, locks them once reviewed |
+| **P&L Manager** (e.g. *Jordan Lee*) | Drafts the monthly KPI justifications for their region (with AI help) and submits them for review |
+| **General Manager** (e.g. *Alex Morgan*) | Reviews the region's submitted KPIs, then approves them or sends them back to the P&L manager |
 | **CFO** (e.g. *Sam Carter*) | Views consolidated dashboard, drills into underperforming regions, asks ad-hoc questions through embedded Genie, *(optionally)* publishes the executive summary to Confluence |
 
-Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across all months from **January 2025 up to and including the current month** — automatically, with no hardcoded dates. Historical months are fully locked; the previous month is partially filed (demo in-progress); the current month is open and not yet started.
+Out of the box the demo seeds 6 regions × 5 KPIs (Revenue Growth, Operating Margin, DSO, OPEX Ratio, Free Cash Flow) across all months from **January 2025 up to and including the current month** — automatically, with no hardcoded dates. Historical months are submitted and approved. In the previous month, Region North and Central have submitted two KPIs that are waiting for GM review and drafted a third; the current month is open and not yet started. A demo switcher on the home page lets you act as the P&L manager, the GM or the CFO.
 
 The Confluence publish-to-wiki feature is **off by default** — the app works without it. Flip the `enable_confluence` widget in notebook 03 to turn it on.
 
 ## Screenshots
 
-**Regional Lead home** — submission table with status indicators; leads enter KPI actuals, write AI-assisted justifications, and lock completed rows.
+**P&L Manager: KPI Reporting** — submission table with status indicators; the P&L manager enters KPI actuals, writes AI-assisted justifications, and submits them for GM review.
 
-![Regional Lead home](docs/screenshots/01-gm-home.png)
+![P&L Manager KPI Reporting](docs/screenshots/01-gm-home.png)
 
-**AI-assisted justification draft** — the app calls Claude Sonnet on Databricks through Unity Gateway to draft narrative context from the raw numbers; the lead edits and approves before submitting.
+**AI-assisted justification draft** — the app calls Claude Sonnet on Databricks through Unity Gateway to draft narrative context from the raw numbers; the P&L manager edits the draft before submitting it.
 
 ![AI justification draft](docs/screenshots/02-ai-draft.png)
 
@@ -75,7 +76,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 
 | Component | Tech | Purpose |
 |---|---|---|
-| Frontend | React 19, TanStack Router, Recharts, Tailwind | Submission UI + executive dashboard |
+| Frontend | React 19, TanStack Router, Tailwind | Submission and review UI, executive overview, embedded AI/BI dashboard |
 | Backend | FastAPI, Pydantic, SQLAlchemy + psycopg | API + Lakebase / Genie / Confluence integration |
 | Transactional store | Databricks Lakebase Autoscale (PostgreSQL) | KPI submissions, departments, userbase |
 | Analytical store | Unity Catalog Delta tables | Genie-readable view of submissions, kept fresh by Lakebase CDF (Change Data Feed, formerly "Lakehouse Sync") |
@@ -103,7 +104,7 @@ The Confluence publish-to-wiki feature is **off by default** — the app works w
 
 ## Deploy on Databricks
 
-The install is two CLI commands plus a couple of UI clicks for things that don't have a public API yet:
+The install is one CLI command plus three notebooks, all driven by the SDK:
 
 ```bash
 # 1. From the repo root: build + push code, notebooks, and the wheel.
@@ -116,8 +117,8 @@ Then in the workspace, open **`notebooks/01_setup_lakebase.py`** — under `/Wor
 | Step | What | Where |
 |---|---|---|
 | 1 | Lakebase project + tables + seed | runs in notebook 01 |
-| 2 | Lakebase CDF activation (CDC → Delta) | notebook 02 + UI activation |
-| 3 | Genie Space, Confluence token (optional), App + resources, Apps deploy | notebook 03 (SDK + UI) |
+| 2 | Lakebase CDF (CDC → Delta), clean views, governed metric view | notebook 02 |
+| 3 | Genie Space, Confluence token (optional), App + resources, AI/BI dashboard, Apps deploy | notebook 03 |
 
 A troubleshooting matrix sits at the bottom of notebook 03 for the most common failure modes.
 
@@ -173,7 +174,7 @@ When you're done with the demo:
 databricks bundle destroy
 ```
 
-…removes the bundle workspace files. To remove the Lakebase project, the App, the synced UC schema, and the secret scope, run **`notebooks/99_teardown.py`** (set the `confirm` widget to `yes`). The Genie Space has to be deleted via the workspace UI — there's no public API for that yet.
+…removes the bundle workspace files. To remove the Lakebase project, the App, the synced UC schema, and the secret scope, run **`notebooks/99_teardown.py`** (set the `confirm` widget to `yes`). Pass the Genie Space ID in its `genie_space_id` widget and it deletes the Space too.
 
 ## Repo layout
 
@@ -190,7 +191,7 @@ financial-kpi-reporting/
 │   └── 99_teardown.py              # Reverses notebooks 01–03 (delete app, project, schema, scope)
 └── src/kpi_reporting/
     ├── backend/                    # FastAPI app, Lakebase/Genie/Confluence clients, mock layer
-    └── ui/                         # React frontend (TanStack Router, Recharts, Tailwind)
+    └── ui/                         # React frontend (TanStack Router, Tailwind)
 ```
 
 ## Open-source dependencies
