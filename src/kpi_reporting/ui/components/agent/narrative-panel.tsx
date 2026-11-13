@@ -7,26 +7,10 @@ import { Sparkles, Copy, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { agentNarrative } from "@/lib/api";
+import { renderMarkdown } from "@/lib/markdown";
 
 interface NarrativePanelProps {
   period: string | null; // null = "All Periods"
-}
-
-// Very minimal markdown → JSX: just handle ## headers and bullet points
-function renderMarkdown(text: string) {
-  const lines = text.split("\n");
-  return lines.map((line, i) => {
-    if (line.startsWith("## ")) {
-      return <h3 key={i} className="font-semibold text-sm mt-4 mb-1 text-foreground">{line.slice(3)}</h3>;
-    }
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      return <li key={i} className="ml-4 text-sm leading-relaxed list-disc">{line.slice(2)}</li>;
-    }
-    if (line.trim() === "") {
-      return <div key={i} className="h-1" />;
-    }
-    return <p key={i} className="text-sm leading-relaxed">{line}</p>;
-  });
 }
 
 export function NarrativePanel({ period }: NarrativePanelProps) {

@@ -14,6 +14,7 @@ import {
 import { Sparkles, Send, Loader2, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
 import { useGenieAsk } from "@/lib/api";
 import type { GenieAttachment } from "@/lib/api";
+import { renderMarkdown } from "@/lib/markdown";
 
 const SAMPLE_QUESTIONS = [
   "What is the average Revenue Growth across all regions for Jan 2026?",
@@ -36,8 +37,12 @@ interface ChatMessage {
 
 function AttachmentView({ attachment }: { attachment: GenieAttachment }) {
   const [sqlOpen, setSqlOpen] = useState(false);
-  const hasData = attachment.columns.length > 0 && attachment.data_array.length > 0;
-  const displayRows = attachment.data_array.slice(0, MAX_DISPLAY_ROWS);
+  const columns = attachment.columns ?? [];
+  // Each row is an array of cell values, one per column.
+  const rows = (attachment.data_array ?? []) as unknown[][];
+  const rowCount = attachment.row_count ?? rows.length;
+  const hasData = columns.length > 0 && rows.length > 0;
+  const displayRows = rows.slice(0, MAX_DISPLAY_ROWS);
 
   return (
     <div className="space-y-2 mt-2">
@@ -64,7 +69,7 @@ function AttachmentView({ attachment }: { attachment: GenieAttachment }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {attachment.columns.map((col) => (
+                  {columns.map((col) => (
                     <TableHead key={col} className="text-xs whitespace-nowrap">
                       {col}
                     </TableHead>
@@ -76,7 +81,7 @@ function AttachmentView({ attachment }: { attachment: GenieAttachment }) {
                   <TableRow key={i}>
                     {row.map((cell, j) => (
                       <TableCell key={j} className="text-xs py-1 whitespace-nowrap">
-                        {cell}
+                        {cell == null ? "" : String(cell)}
                       </TableCell>
                     ))}
                   </TableRow>
@@ -85,8 +90,8 @@ function AttachmentView({ attachment }: { attachment: GenieAttachment }) {
             </Table>
           </div>
           <div className="px-3 py-1.5 bg-muted text-xs text-muted-foreground border-t">
-            {attachment.row_count} row{attachment.row_count !== 1 ? "s" : ""}
-            {attachment.row_count > MAX_DISPLAY_ROWS && ` (showing first ${MAX_DISPLAY_ROWS})`}
+            {rowCount} row{rowCount !== 1 ? "s" : ""}
+            {rowCount > MAX_DISPLAY_ROWS && ` (showing first ${MAX_DISPLAY_ROWS})`}
             {attachment.truncated && " — results truncated by Genie"}
           </div>
         </div>
@@ -115,7 +120,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             <span className="text-xs font-medium">Error</span>
           </div>
         )}
-        <p className="whitespace-pre-wrap">{message.content}</p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap">{message.content}</p>
+        ) : (
+          <div>{renderMarkdown(message.content)}</div>
+        )}
         {message.attachments?.map((att, i) => (
           <AttachmentView key={i} attachment={att} />
         ))}
@@ -134,9 +143,10 @@ export function GenieChatPanel() {
     mutation: {
       onSuccess: (result) => {
         const resp = result.data;
-        setConversationId(resp.conversation_id);
+        const attachments = resp.attachments ?? [];
+        setConversationId(resp.conversation_id ?? null);
 
-        const textParts = resp.attachments
+        const textParts = attachments
           .map((a) => a.text)
           .filter(Boolean);
         const content = textParts.length > 0
@@ -152,8 +162,8 @@ export function GenieChatPanel() {
           {
             role: "assistant",
             content,
-            attachments: resp.attachments.filter(
-              (a) => a.sql || (a.columns.length > 0 && a.data_array.length > 0)
+            attachments: attachments.filter(
+              (a) => a.sql || ((a.columns ?? []).length > 0 && (a.data_array ?? []).length > 0)
             ),
             error: resp.status === "FAILED",
           },

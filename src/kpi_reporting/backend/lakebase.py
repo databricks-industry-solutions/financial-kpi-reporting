@@ -1,11 +1,13 @@
 """Lakebase client with connection pooling and token refresh."""
 import time
 import uuid as _uuid
-from datetime import datetime, date
+from datetime import date, datetime
 from urllib.parse import quote_plus
+
 from databricks.sdk import WorkspaceClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import QueuePool
+
 from .logger import logger
 
 
@@ -20,6 +22,18 @@ def _serialize_row(row: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def _new_engine(url: str):
+    """Create a pooled engine for Lakebase.
+
+    Lakebase scales to zero when idle, and suspending the compute closes every
+    pooled connection server-side. pool_pre_ping checks each connection on
+    checkout and reconnects (waking the compute) instead of failing the first
+    request after a suspend with "terminating connection due to administrator
+    command".
+    """
+    return create_engine(url, poolclass=QueuePool, pool_size=5, pool_recycle=1800, pool_pre_ping=True)
 
 
 _FILL_FIELDS = (
@@ -53,6 +67,8 @@ class LakebaseClient:
         """Generate a fresh OAuth token for Lakebase authentication."""
         endpoint = self._pg_endpoint_name or f"projects/{self.project_id}/branches/production/endpoints/primary"
         cred = self._ws.postgres.generate_database_credential(endpoint=endpoint)
+        if not cred.token:
+            raise RuntimeError(f"Lakebase returned no database credential for {endpoint}")
         return cred.token
 
     def _refresh_engine(self):
@@ -64,31 +80,37 @@ class LakebaseClient:
         if self._pg_host and self._pg_user and self._pg_password:
             # Static native PG credentials (local dev)
             url = f"postgresql+psycopg://{quote_plus(self._pg_user)}:{quote_plus(self._pg_password)}@{self._pg_host}/databricks_postgres?sslmode=require"
-            self._engine = create_engine(url, poolclass=QueuePool, pool_size=5, pool_recycle=1800)
+            self._engine = _new_engine(url)
             self._token_expires = now + 86400
             logger.info(f"Lakebase engine created with native PG credentials (user={self._pg_user})")
         elif self._pg_host and self._pg_user:
             # App resource: host+user injected, generate OAuth token
             token = self._get_oauth_password()
             url = f"postgresql+psycopg://{quote_plus(self._pg_user)}:{quote_plus(token)}@{self._pg_host}/databricks_postgres?sslmode=require"
-            self._engine = create_engine(url, poolclass=QueuePool, pool_size=5, pool_recycle=1800)
+            self._engine = _new_engine(url)
             self._token_expires = now + 3000  # refresh before 1h expiry
             logger.info(f"Lakebase engine created via app resource (host={self._pg_host}, user={self._pg_user})")
         else:
             # Fallback: resolve endpoint from project ID
             endpoint_name = f"projects/{self.project_id}/branches/production/endpoints/primary"
             ep = self._ws.postgres.get_endpoint(name=endpoint_name)
-            host = ep.status.hosts.host
+            host = ep.status.hosts.host if ep.status and ep.status.hosts else None
+            if not host:
+                raise RuntimeError(f"Lakebase endpoint {endpoint_name} has no host yet")
             token = self._get_oauth_password()
             username = self._ws.config.client_id or self._ws.current_user.me().user_name
+            if not username:
+                raise RuntimeError("Could not determine the Lakebase user name")
             url = f"postgresql+psycopg://{quote_plus(username)}:{quote_plus(token)}@{host}/databricks_postgres?sslmode=require"
-            self._engine = create_engine(url, poolclass=QueuePool, pool_size=5, pool_recycle=1800)
+            self._engine = _new_engine(url)
             self._token_expires = now + 3000
             logger.info(f"Lakebase engine refreshed (OAuth fallback, host={host})")
 
     def execute(self, query: str, params: dict | None = None) -> list[dict]:
         """Execute a query and return results as list of dicts."""
         self._refresh_engine()
+        if self._engine is None:
+            raise RuntimeError("Lakebase engine is not initialised")
         with self._engine.connect() as conn:
             result = conn.execute(text(query), params or {})
             rows = [_serialize_row(dict(row._mapping)) for row in result.fetchall()] if result.returns_rows else []
@@ -174,7 +196,7 @@ class LakebaseClient:
         filled = sum(1 for s in subs if self._is_filled(s))
         locked = sum(1 for s in subs if s.get("kpi_lockin"))
         gm_reviewed = sum(1 for s in subs if s.get("reviewed_by_gm"))
-        departments_reporting = len(set(s["department_id"] for s in subs if self._is_filled(s)))
+        departments_reporting = len({s["department_id"] for s in subs if self._is_filled(s)})
 
         return {
             "total_entries": total,

@@ -30,7 +30,7 @@ class Runtime:
                     client.get_departments()
                     self._lakebase = client
                     logger.info(f"Lakebase client initialized (project={self.config.lakebase_project})")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - any connection problem falls back to the mock data layer
                     logger.warning(f"Lakebase unavailable ({e}), using mock data")
                     from .mock_data import MockLakebaseClient
                     self._lakebase = MockLakebaseClient()

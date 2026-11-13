@@ -21,13 +21,13 @@ function toInitials(name: string): string {
 
 function userToPersona(user: CurrentUser): Persona {
   return {
-    deptId: user.department_id,
-    deptName: user.department_name,
+    deptId: user.department_id ?? null,
+    deptName: user.department_name ?? null,
     leadName: user.name,
     role: user.job_name ?? (user.is_executive ? "Executive" : "Viewer"),
     initials: toInitials(user.name),
     email: user.email,
-    isExecutive: user.is_executive,
+    isExecutive: user.is_executive ?? false,
   };
 }
 
