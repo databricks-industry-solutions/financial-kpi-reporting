@@ -1,5 +1,5 @@
-from datetime import datetime
 from pydantic import BaseModel
+
 from .. import __version__
 
 
@@ -20,7 +20,7 @@ class CurrentUser(BaseModel):
     department_id: str | None = None
     operation_unit_code: str | None = None
     job_name: str | None = None
-    role: str = "viewer"  # "gm", "blm", "bc", "executive", "viewer"
+    role: str = "viewer"  # "pnl", "gm", "blm", "bc", "executive", "viewer"
     is_executive: bool = False
 
 
@@ -68,9 +68,10 @@ class TaskItem(BaseModel):
     description: str
     period: str
     status: str  # "pending" | "in_progress" | "done"
-    count: int | None = None          # generic count (GM: unjustified KPIs)
+    count: int | None = None          # P&L: KPIs left to submit; GM: KPIs left to approve
     total: int | None = None
     unlocked_count: int | None = None  # CFO: submissions not yet locked
+    sent_back_count: int | None = None  # P&L: KPIs the GM sent back for changes
     negative_count: int | None = None  # CFO: submissions with cautious/negative sentiment
     route: str | None = None           # primary deep-link route
     actions: list[TaskAction] = []     # labelled action buttons
@@ -114,6 +115,9 @@ class SubmissionOut(BaseModel):
     sentiment_tags: str
     kpi_lockin: bool
     reviewed_by_gm: str
+    # Name of the GM who sent the KPI back to the P&L manager; cleared on resubmission.
+    # Defaults to "" so deployments that predate the column still load.
+    sent_back_by: str = ""
     submitted_by: str
     submitted_at: str
     updated_at: str
@@ -132,6 +136,7 @@ class SubmissionUpdateRequest(BaseModel):
     sentiment_tags: str | None = None
     kpi_lockin: bool | None = None
     reviewed_by_gm: str | None = None
+    sent_back_by: str | None = None
 
 
 # --- Dashboard ---
@@ -220,25 +225,3 @@ class GenieAskResponse(BaseModel):
     status: str
     error: str | None = None  # Genie's own error text, present when status == "FAILED"
     attachments: list[GenieAttachment] = []
-
-
-# --- Forecasting ---
-
-class ForecastPoint(BaseModel):
-    period: str       # e.g. "Apr 2026"
-    actual: float | None = None
-    low: float | None = None
-    mid: float | None = None
-    high: float | None = None
-    is_forecast: bool = False
-
-
-class KpiForecast(BaseModel):
-    kpi_name: str
-    kpi_unit: str
-    points: list[ForecastPoint]
-    insight: str      # 1-sentence trend summary (rule-based, no LLM)
-
-
-class ForecastResponse(BaseModel):
-    forecasts: list[KpiForecast]

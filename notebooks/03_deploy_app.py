@@ -154,7 +154,9 @@ GENIE_INSTRUCTIONS = [
     "- Each row in `kpi_submissions` is one KPI (e.g. Revenue Growth, Operating ",
     "Margin) for one region and one reporting period. Use it for row-level detail.\n",
     "- `kpi_value` is the actual reported number; its unit is in `kpi_unit`.\n",
-    "- `kpi_lockin = TRUE` means the regional lead locked and formally submitted the data.\n",
+    "- `kpi_lockin = TRUE` means the P&L manager submitted the KPI for review. ",
+    "`reviewed_by_gm` holds the name of the General Manager who approved it, and is ",
+    "empty while it awaits review.\n",
     "- `key_drivers_quantitative` / `key_drivers_qualitative` explain WHY the KPI landed where it did.\n",
     "- `departments` joins to `kpi_submissions` on `department_id` for region names.\n",
     "- `kpi_targets` holds each KPI's target; `higher_is_better = FALSE` marks KPIs ",
@@ -424,14 +426,13 @@ for r in resources:
 # MAGIC explicit grants:
 # MAGIC
 # MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
-# MAGIC - **Genie chat returns FAILED** (SP lacks Genie Space or UC permissions)
-# MAGIC - **Submission edits silently fail** (Lakebase rejects INSERT/UPDATE)
+# MAGIC - **Genie chat returns FAILED** (SP lacks UC or warehouse permissions)
 # MAGIC
-# MAGIC The cell below grants the App SP what it needs:
+# MAGIC The cell below grants the App SP what it needs. (`CAN_RUN` on the Genie Space
+# MAGIC comes from the app's `genie_space` resource in Step 3.)
 # MAGIC
 # MAGIC | Layer | Object | Privilege |
 # MAGIC |---|---|---|
-# MAGIC | Genie | Genie Space | `CAN_RUN` (required to call the Conversation API as the SP) |
 # MAGIC | SQL | SQL warehouse | `CAN_USE` (Genie executes its SQL on the warehouse) |
 # MAGIC | UC | `<target_catalog>` | `USE CATALOG` |
 # MAGIC | UC | `<target_catalog>.<target_schema>` | `USE SCHEMA` |
@@ -462,16 +463,28 @@ print(f"App SP: {sp_client_id}")
 # Lakebase Postgres tables — these live in the `public` schema of the Lakebase DB
 # (created/seeded by notebook 01). Used for the Lakebase GRANTs further below.
 LAKEBASE_TABLES = ("departments", "kpi_submissions", "monthly_reporting_userbase")
-# Unity Catalog objects the App SP needs SELECT on within TARGET_CATALOG.TARGET_SCHEMA:
+# Unity Catalog objects the App SP needs SELECT on:
 #   - The clean views (same names as LAKEBASE_TABLES) created by notebook 02 step 5
-#   - The lb_*_history raw CDC tables Lakebase CDF creates — Genie resolves views to
-#     their underlying sources and checks permissions on those too
+#   - The raw CDC history tables Lakebase CDF writes to. Genie resolves views to
+#     their underlying sources and checks permissions on those too. Their names come
+#     from the CDF statuses: if the schema already holds history tables from an
+#     earlier CDF config, CDF picks a new name (e.g. lb_kpi_submissions_history_1).
 #   - kpi_targets and kpi_metrics (UC-only, created by notebook 02 step 6)
-UC_TABLES = (
-    "departments", "kpi_submissions", "monthly_reporting_userbase",
-    "lb_departments_history", "lb_kpi_submissions_history", "lb_monthly_reporting_userbase_history",
-    "kpi_targets", "kpi_metrics",
-)
+CDF_HISTORY_TABLES = []
+try:
+    _cdf_db = next(iter(w.postgres.list_databases(parent=f"projects/{LAKEBASE_PROJECT}/branches/production"))).name
+    CDF_HISTORY_TABLES = [
+        s.uc_table for s in w.postgres.list_cdf_statuses(parent=f"{_cdf_db}/cdf-configs/public")
+        if getattr(s, "uc_table", None)
+    ]
+except Exception as e:
+    print(f"Could not read the Lakebase CDF statuses ({e}); using the default history table names.")
+if not CDF_HISTORY_TABLES:
+    CDF_HISTORY_TABLES = [f"{TARGET_CATALOG}.{TARGET_SCHEMA}.lb_{t}_history" for t in LAKEBASE_TABLES]
+UC_TABLES = [
+    f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{t}"
+    for t in (*LAKEBASE_TABLES, "kpi_targets", "kpi_metrics")
+] + CDF_HISTORY_TABLES
 
 # --- Unity Catalog grants (so Genie can read the synced Delta views) ---
 # USE_CATALOG requires MANAGE on the catalog, which the notebook runner may not
@@ -496,8 +509,7 @@ try:
     print(f"  USE_SCHEMA on {TARGET_CATALOG}.{TARGET_SCHEMA}")
 except Exception as e:
     print(f"  USE_SCHEMA skipped: {e}")
-for tbl in UC_TABLES:
-    full = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{tbl}"
+for full in UC_TABLES:
     try:
         w.grants.update(
             securable_type="table",
@@ -565,28 +577,8 @@ else:
     print("\nSkipping warehouse grant — the genie_warehouse_id widget is blank.")
     print("  If Genie queries fail with PermissionDenied, set it and re-run this cell.")
 
-# --- Genie Space grant (so the App SP can call the Conversation API) ---
-# Without CAN_RUN on the Space, every w.genie.start_conversation / create_message
-# call from the App's SP returns MessageStatus.FAILED — even though UC and the
-# warehouse are correctly granted.  The UI works because you're logged in as yourself;
-# the App runs as its service principal, which needs its own space-level permission.
-from databricks.sdk.service.iam import AccessControlRequest, PermissionLevel
-
-print(f"\nGranting CAN_RUN on Genie Space {GENIE_SPACE_ID} to App SP {sp_client_id}...")
-try:
-    w.permissions.update(
-        request_object_type="genie-rooms",
-        request_object_id=GENIE_SPACE_ID,
-        access_control_list=[
-            AccessControlRequest(
-                service_principal_name=sp_client_id,
-                permission_level=PermissionLevel.CAN_RUN,
-            ),
-        ],
-    )
-    print(f"  CAN_RUN on genie-rooms/{GENIE_SPACE_ID} — App SP can now call the Conversation API.")
-except Exception as e:
-    print(f"  Genie Space grant skipped (grant manually if needed): {e}")
+# The App SP's CAN_RUN on the Genie Space comes from the app's `genie_space`
+# resource (Step 3), so it doesn't need a separate grant here.
 
 # COMMAND ----------
 
@@ -615,41 +607,47 @@ def _build_dashboard_payload(catalog: str, schema: str) -> str:
     works unchanged for any set of KPIs defined in notebook 01.
     """
     tbl = f"`{catalog}`.`{schema}`.kpi_submissions"
+    # Aggregates come from the governed kpi_metrics metric view (notebook 02, Step 6),
+    # so the dashboard and Genie share one definition of each KPI. The row-level
+    # detail table reads kpi_submissions directly.
+    mv = f"`{catalog}`.`{schema}`.kpi_metrics"
     dashboard = {
       "datasets": [
         {"name": "ds_summary", "displayName": "Summary KPIs", "queryLines": [
-            "SELECT COUNT(*) AS total_submissions, ",
-            "COUNT(CASE WHEN kpi_lockin THEN 1 END) AS locked_submissions, ",
-            "COUNT(DISTINCT department_name) AS active_departments, ",
-            "COUNT(DISTINCT period) AS periods ",
-            f"FROM {tbl} "]},
+            "SELECT MEASURE(`Submissions`) AS total_submissions, ",
+            "MEASURE(`Locked Submissions`) AS locked_submissions, ",
+            "MEASURE(`Regions Reporting`) AS active_departments, ",
+            "MEASURE(`Reporting Periods`) AS periods ",
+            f"FROM {mv} "]},
         {"name": "ds_period_trend", "displayName": "Justification Rate by Period", "queryLines": [
-            "SELECT period, period_start, COUNT(*) AS total, ",
-            "COUNT(CASE WHEN kpi_lockin THEN 1 END) AS locked, ",
-            "ROUND(COUNT(CASE WHEN kpi_lockin THEN 1 END)*100.0/COUNT(*),1) AS lock_pct, ",
-            "COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END) AS justified, ",
-            "ROUND(COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END)*100.0/COUNT(*),1) AS justify_pct ",
-            f"FROM {tbl} GROUP BY period, period_start ORDER BY period_start "]},
+            "SELECT `Period` AS period, `Reporting Month` AS period_start, ",
+            "MEASURE(`Submissions`) AS total, MEASURE(`Locked Submissions`) AS locked, ",
+            "ROUND(MEASURE(`Lock Rate`) * 100, 1) AS lock_pct, ",
+            "MEASURE(`Justified Submissions`) AS justified, ",
+            "ROUND(MEASURE(`Justified Rate`) * 100, 1) AS justify_pct ",
+            f"FROM {mv} GROUP BY ALL ORDER BY period_start "]},
         {"name": "ds_kpi1_by_region", "displayName": "Primary KPI by Region", "queryLines": [
-            "SELECT department_name, period, period_start, ROUND(AVG(kpi_value),2) AS avg_value ",
-            f"FROM {tbl} WHERE kpi_number=1 ",
-            "AND period_start>=add_months(current_date(),-10) ",
-            "GROUP BY department_name, period, period_start ORDER BY period_start, department_name "]},
+            "SELECT `Region` AS department_name, `Period` AS period, `Reporting Month` AS period_start, ",
+            "ROUND(MEASURE(`Avg KPI Value`), 2) AS avg_value ",
+            f"FROM {mv} WHERE `KPI Number` = 1 ",
+            "AND `Reporting Month` >= add_months(current_date(), -10) ",
+            "GROUP BY ALL ORDER BY period_start, department_name "]},
         {"name": "ds_justify_status", "displayName": "Justification Status Recent Periods", "queryLines": [
-            "SELECT department_name, period, period_start, COUNT(*) AS total_kpis, ",
-            "COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END) AS justified_kpis, ",
-            "ROUND(COUNT(CASE WHEN key_drivers_quantitative!='' THEN 1 END)*100.0/COUNT(*),0) AS justify_pct ",
-            f"FROM {tbl} WHERE period IN (SELECT period FROM (SELECT period, MIN(period_start) AS ps FROM {tbl} GROUP BY period ORDER BY ps DESC LIMIT 4)) ",
-            "GROUP BY department_name, period, period_start ORDER BY period_start, department_name "]},
+            "SELECT `Region` AS department_name, `Period` AS period, `Reporting Month` AS period_start, ",
+            "MEASURE(`Submissions`) AS total_kpis, MEASURE(`Justified Submissions`) AS justified_kpis, ",
+            "ROUND(MEASURE(`Justified Rate`) * 100, 0) AS justify_pct ",
+            f"FROM {mv} WHERE `Reporting Month` >= add_months(trunc(current_date(), 'MM'), -3) ",
+            "GROUP BY ALL ORDER BY period_start, department_name "]},
         {"name": "ds_kpi_trends", "displayName": "All KPI Trends", "queryLines": [
-            "SELECT kpi_name, period, period_start, ROUND(AVG(kpi_value),2) AS avg_value ",
-            f"FROM {tbl} GROUP BY kpi_name, period, period_start ORDER BY kpi_name, period_start "]},
+            "SELECT `KPI` AS kpi_name, `Period` AS period, `Reporting Month` AS period_start, ",
+            "ROUND(MEASURE(`Avg KPI Value`), 2) AS avg_value ",
+            f"FROM {mv} GROUP BY ALL ORDER BY kpi_name, period_start "]},
         {"name": "ds_sentiment", "displayName": "Sentiment Distribution", "queryLines": [
-            f"SELECT sentiment_tags, COUNT(*) AS cnt FROM {tbl} ",
-            "WHERE sentiment_tags!='' GROUP BY sentiment_tags ORDER BY cnt DESC "]},
+            "SELECT `Sentiment` AS sentiment_tags, MEASURE(`Submissions`) AS cnt ",
+            f"FROM {mv} WHERE `Sentiment` != '' GROUP BY ALL ORDER BY cnt DESC "]},
         {"name": "ds_detail", "displayName": "KPI Detail", "queryLines": [
             "SELECT department_name, kpi_name, period, period_start, kpi_value, kpi_unit, ",
-            "sentiment_tags, kpi_lockin, ",
+            "sentiment_tags, kpi_lockin, reviewed_by_gm, ",
             "CASE WHEN key_drivers_quantitative!='' THEN 'Yes' ELSE 'No' END AS has_justification, ",
             f"submitted_by FROM {tbl} ORDER BY period_start DESC, department_name, kpi_name "]},
       ],
@@ -658,10 +656,10 @@ def _build_dashboard_payload(catalog: str, schema: str) -> str:
             {"widget": {"name": "title", "multilineTextboxSpec": {"lines": ["## KPI Dashboard"]}}, "position": {"x": 0, "y": 0, "width": 6, "height": 1}},
             {"widget": {"name": "subtitle", "multilineTextboxSpec": {"lines": ["Monthly KPI reporting — submission completeness, trends and justification status"]}}, "position": {"x": 0, "y": 1, "width": 6, "height": 1}},
             {"widget": {"name": "kpi-total-submissions", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "total_submissions", "expression": "`total_submissions`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total_submissions", "displayName": "Total Submissions"}}, "frame": {"showTitle": True, "title": "Total Submissions"}}}, "position": {"x": 0, "y": 2, "width": 2, "height": 3}},
-            {"widget": {"name": "kpi-locked", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "locked_submissions", "expression": "`locked_submissions`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "locked_submissions", "displayName": "Locked Submissions"}}, "frame": {"showTitle": True, "title": "Locked Submissions"}}}, "position": {"x": 2, "y": 2, "width": 2, "height": 3}},
+            {"widget": {"name": "kpi-locked", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "locked_submissions", "expression": "`locked_submissions`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "locked_submissions", "displayName": "Submitted KPIs"}}, "frame": {"showTitle": True, "title": "Submitted KPIs"}}}, "position": {"x": 2, "y": 2, "width": 2, "height": 3}},
             {"widget": {"name": "kpi-departments", "queries": [{"name": "main_query", "query": {"datasetName": "ds_summary", "fields": [{"name": "active_departments", "expression": "`active_departments`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "active_departments", "displayName": "Regions"}}, "frame": {"showTitle": True, "title": "Regions Reporting"}}}, "position": {"x": 4, "y": 2, "width": 2, "height": 3}},
             {"widget": {"name": "section-justification", "multilineTextboxSpec": {"lines": ["### Justification Completion & Sentiment"]}}, "position": {"x": 0, "y": 5, "width": 6, "height": 1}},
-            {"widget": {"name": "chart-justify-trend", "queries": [{"name": "main_query", "query": {"datasetName": "ds_period_trend", "fields": [{"name": "period_start", "expression": "`period_start`"}, {"name": "justify_pct", "expression": "`justify_pct`"}, {"name": "lock_pct", "expression": "`lock_pct`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "period_start", "scale": {"type": "temporal"}, "displayName": "Period"}, "y": {"scale": {"type": "quantitative"}, "fields": [{"fieldName": "justify_pct", "displayName": "Justified (%)"}, {"fieldName": "lock_pct", "displayName": "Locked-In (%)"}]}}, "frame": {"showTitle": True, "title": "Justification & Lock-in Rate (%)"}}}, "position": {"x": 0, "y": 6, "width": 4, "height": 5}},
+            {"widget": {"name": "chart-justify-trend", "queries": [{"name": "main_query", "query": {"datasetName": "ds_period_trend", "fields": [{"name": "period_start", "expression": "`period_start`"}, {"name": "justify_pct", "expression": "`justify_pct`"}, {"name": "lock_pct", "expression": "`lock_pct`"}], "disaggregated": True}}], "spec": {"version": 3, "widgetType": "line", "encodings": {"x": {"fieldName": "period_start", "scale": {"type": "temporal"}, "displayName": "Period"}, "y": {"scale": {"type": "quantitative"}, "fields": [{"fieldName": "justify_pct", "displayName": "Justified (%)"}, {"fieldName": "lock_pct", "displayName": "Submitted (%)"}]}}, "frame": {"showTitle": True, "title": "Justification & Submission Rate (%)"}}}, "position": {"x": 0, "y": 6, "width": 4, "height": 5}},
             {"widget": {"name": "chart-sentiment", "queries": [{"name": "main_query", "query": {"datasetName": "ds_sentiment", "fields": [{"name": "sentiment_tags", "expression": "`sentiment_tags`"}, {"name": "cnt", "expression": "`cnt`"}], "disaggregated": False}}], "spec": {"version": 3, "widgetType": "pie", "encodings": {"angle": {"fieldName": "cnt", "scale": {"type": "quantitative"}, "displayName": "Count"}, "color": {"fieldName": "sentiment_tags", "scale": {"type": "categorical"}, "displayName": "Sentiment"}}, "frame": {"showTitle": True, "title": "Sentiment Distribution"}}}, "position": {"x": 4, "y": 6, "width": 2, "height": 5}},
         ]},
         {"name": "region-performance", "displayName": "Region Performance", "pageType": "PAGE_TYPE_CANVAS", "layout": [
@@ -681,7 +679,7 @@ def _build_dashboard_payload(catalog: str, schema: str) -> str:
             {"widget": {"name": "filter-period", "queries": [{"name": "q_period", "query": {"datasetName": "ds_detail", "fields": [{"name": "period", "expression": "`period`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "period", "displayName": "Period", "queryName": "q_period"}]}, "frame": {"showTitle": True, "title": "Period"}}}, "position": {"x": 0, "y": 1, "width": 2, "height": 2}},
             {"widget": {"name": "filter-dept", "queries": [{"name": "q_dept", "query": {"datasetName": "ds_detail", "fields": [{"name": "department_name", "expression": "`department_name`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "department_name", "displayName": "Region", "queryName": "q_dept"}]}, "frame": {"showTitle": True, "title": "Region"}}}, "position": {"x": 2, "y": 1, "width": 2, "height": 2}},
             {"widget": {"name": "filter-kpi", "queries": [{"name": "q_kpi", "query": {"datasetName": "ds_detail", "fields": [{"name": "kpi_name", "expression": "`kpi_name`"}], "disaggregated": False}}], "spec": {"version": 2, "widgetType": "filter-multi-select", "encodings": {"fields": [{"fieldName": "kpi_name", "displayName": "KPI", "queryName": "q_kpi"}]}, "frame": {"showTitle": True, "title": "KPI"}}}, "position": {"x": 4, "y": 1, "width": 2, "height": 2}},
-            {"widget": {"name": "table-detail", "queries": [{"name": "main_query", "query": {"datasetName": "ds_detail", "fields": [{"name": "period", "expression": "`period`"}, {"name": "department_name", "expression": "`department_name`"}, {"name": "kpi_name", "expression": "`kpi_name`"}, {"name": "kpi_value", "expression": "`kpi_value`"}, {"name": "kpi_unit", "expression": "`kpi_unit`"}, {"name": "sentiment_tags", "expression": "`sentiment_tags`"}, {"name": "has_justification", "expression": "`has_justification`"}, {"name": "kpi_lockin", "expression": "`kpi_lockin`"}, {"name": "submitted_by", "expression": "`submitted_by`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "period", "displayName": "Period"}, {"fieldName": "department_name", "displayName": "Region"}, {"fieldName": "kpi_name", "displayName": "KPI"}, {"fieldName": "kpi_value", "displayName": "Value"}, {"fieldName": "kpi_unit", "displayName": "Unit"}, {"fieldName": "sentiment_tags", "displayName": "Sentiment"}, {"fieldName": "has_justification", "displayName": "Justified"}, {"fieldName": "kpi_lockin", "displayName": "Locked"}, {"fieldName": "submitted_by", "displayName": "Submitted By"}]}, "frame": {"showTitle": True, "title": "KPI Submissions"}}}, "position": {"x": 0, "y": 3, "width": 6, "height": 8}},
+            {"widget": {"name": "table-detail", "queries": [{"name": "main_query", "query": {"datasetName": "ds_detail", "fields": [{"name": "period", "expression": "`period`"}, {"name": "department_name", "expression": "`department_name`"}, {"name": "kpi_name", "expression": "`kpi_name`"}, {"name": "kpi_value", "expression": "`kpi_value`"}, {"name": "kpi_unit", "expression": "`kpi_unit`"}, {"name": "sentiment_tags", "expression": "`sentiment_tags`"}, {"name": "has_justification", "expression": "`has_justification`"}, {"name": "kpi_lockin", "expression": "`kpi_lockin`"}, {"name": "reviewed_by_gm", "expression": "`reviewed_by_gm`"}, {"name": "submitted_by", "expression": "`submitted_by`"}], "disaggregated": True}}], "spec": {"version": 2, "widgetType": "table", "encodings": {"columns": [{"fieldName": "period", "displayName": "Period"}, {"fieldName": "department_name", "displayName": "Region"}, {"fieldName": "kpi_name", "displayName": "KPI"}, {"fieldName": "kpi_value", "displayName": "Value"}, {"fieldName": "kpi_unit", "displayName": "Unit"}, {"fieldName": "sentiment_tags", "displayName": "Sentiment"}, {"fieldName": "has_justification", "displayName": "Justified"}, {"fieldName": "kpi_lockin", "displayName": "Submitted"}, {"fieldName": "reviewed_by_gm", "displayName": "Approved by GM"}, {"fieldName": "submitted_by", "displayName": "Prepared by"}]}, "frame": {"showTitle": True, "title": "KPI Submissions"}}}, "position": {"x": 0, "y": 3, "width": 6, "height": 8}},
         ]},
       ]
     }

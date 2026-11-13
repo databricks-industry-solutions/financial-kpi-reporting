@@ -2,11 +2,10 @@
 
 Two agents:
 1. JustificationAgent  — drafts a KPI justification field from data signals.
-2. NarrativeAgent      — drafts an executive narrative for all locked submissions.
+2. NarrativeAgent      — drafts an executive narrative for a reporting period.
 
 Both stream SSE tokens back to the frontend.
 """
-import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
@@ -43,7 +42,8 @@ def _get_ai_client(gateway_url: str | None = None) -> AsyncOpenAI:
             ws = WorkspaceClient()
             auth = ws.config.authenticate()
             token = auth.get("Authorization", "").replace("Bearer ", "")
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - no credentials found; the model call then fails with a clear 401
+            logger.warning(f"No Databricks credentials for the AI client: {e}")
             token = "token"
     return AsyncOpenAI(
         api_key=token or "token",
@@ -101,7 +101,6 @@ def _build_justify_prompt(
     submission: dict[str, Any],
     peer_submissions: list[dict[str, Any]],
     prior_submissions: list[dict[str, Any]],
-    genie_context: str,
 ) -> str:
     kpi_name = submission.get("kpi_name", "")
     kpi_value = submission.get("kpi_value")
@@ -137,13 +136,10 @@ def _build_justify_prompt(
     ]
 
     if prior_lines:
-        parts.append(f"\nPrior periods for comparison:\n" + "\n".join(prior_lines))
+        parts.append("\nPrior periods for comparison:\n" + "\n".join(prior_lines))
 
     if peer_lines:
-        parts.append(f"\nPeer regions this period:\n" + "\n".join(peer_lines))
-
-    if genie_context:
-        parts.append(f"\nAdditional data from Genie:\n{genie_context}")
+        parts.append("\nPeer regions this period:\n" + "\n".join(peer_lines))
 
     field_instruction = _FIELD_GUIDANCE.get(field, "Write a professional justification.")
     parts.append(f"\nField to fill in: {field.replace('_', ' ').title()}")
@@ -157,12 +153,11 @@ async def stream_justification(
     submission: dict[str, Any],
     peer_submissions: list[dict[str, Any]],
     prior_submissions: list[dict[str, Any]],
-    genie_context: str = "",
     gateway_url: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE-formatted tokens for a justification draft."""
     client = _get_ai_client(gateway_url)
-    prompt = _build_justify_prompt(field, submission, peer_submissions, prior_submissions, genie_context)
+    prompt = _build_justify_prompt(field, submission, peer_submissions, prior_submissions)
 
     logger.info(f"JustificationAgent: field={field}, dept={submission.get('department_name')}, kpi={submission.get('kpi_name')}")
 
@@ -181,7 +176,7 @@ async def stream_justification(
             if delta:
                 yield f"data: {json.dumps({'token': delta})}\n\n"
         yield "data: {\"done\": true}\n\n"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any model error is streamed to the UI as an error event
         logger.error(f"JustificationAgent error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
@@ -211,7 +206,7 @@ def _build_narrative_prompt(
 
     # Summarise per KPI per dept
     summary_lines = []
-    kpi_names = sorted(set(s["kpi_name"] for s in submissions))
+    kpi_names = sorted({s["kpi_name"] for s in submissions})
 
     for kpi in kpi_names:
         kpi_subs = [s for s in submissions if s["kpi_name"] == kpi]
@@ -235,7 +230,8 @@ def _build_narrative_prompt(
             if planned:
                 summary_lines.append(f"  Actions: {planned[:100]}")
 
-    locked = sum(1 for s in submissions if s.get("kpi_lockin"))
+    submitted = sum(1 for s in submissions if s.get("kpi_lockin"))
+    approved = sum(1 for s in submissions if s.get("reviewed_by_gm"))
     total = len(submissions)
     fill_rate = round(100 * sum(1 for s in submissions if any(s.get(f) for f in (
         "key_drivers_quantitative", "key_drivers_qualitative",
@@ -244,8 +240,9 @@ def _build_narrative_prompt(
 
     header = (
         f"Period: {period}\n"
-        f"Reporting status: {locked}/{total} KPIs locked in | Fill rate: {fill_rate}%\n"
-        f"Departments reporting: {len(set(s.get('department_name') for s in submissions))}\n"
+        f"Reporting status: {submitted}/{total} KPIs submitted by P&L managers, "
+        f"{approved}/{total} approved by GMs | Fill rate: {fill_rate}%\n"
+        f"Departments reporting: {len({s.get('department_name') for s in submissions})}\n"
     )
 
     return header + "\n".join(summary_lines)
@@ -278,6 +275,6 @@ async def stream_narrative(
             if delta:
                 yield f"data: {json.dumps({'token': delta})}\n\n"
         yield "data: {\"done\": true}\n\n"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any model error is streamed to the UI as an error event
         logger.error(f"NarrativeAgent error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"

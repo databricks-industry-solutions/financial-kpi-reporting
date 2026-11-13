@@ -284,6 +284,7 @@ with psycopg.connect(conn_string) as conn:
                 sentiment_tags VARCHAR(100) NOT NULL DEFAULT '',
                 kpi_lockin BOOLEAN NOT NULL DEFAULT FALSE,
                 reviewed_by_gm VARCHAR(200) NOT NULL DEFAULT '',
+                sent_back_by VARCHAR(200) NOT NULL DEFAULT '',
                 submitted_by VARCHAR(200) NOT NULL DEFAULT '',
                 submitted_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -293,6 +294,14 @@ with psycopg.connect(conn_string) as conn:
             )
         """)
         print("Created kpi_submissions table")
+
+        # Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an
+        # existing table untouched, so add them here to upgrade earlier deployments.
+        # sent_back_by: the GM who sent a KPI back to the P&L manager (cleared on resubmit).
+        cur.execute(
+            "ALTER TABLE kpi_submissions "
+            "ADD COLUMN IF NOT EXISTS sent_back_by VARCHAR(200) NOT NULL DEFAULT ''"
+        )
 
 # COMMAND ----------
 
@@ -311,7 +320,19 @@ DEPARTMENTS = [
     ("Region International", "Noah Schmidt"),
 ]
 
-# Userbase entries: regional leads (gm) + one executive (CFO)
+# P&L manager per region: prepares and submits the KPI justifications that the
+# region's General Manager (the lead above) reviews. Must match PNL_MANAGERS in
+# src/kpi_reporting/backend/mock_data.py.
+PNL_MANAGERS = {
+    "Region North": "Jordan Lee",
+    "Region South": "Maya Singh",
+    "Region East": "Lucas Romero",
+    "Region West": "Emma Fischer",
+    "Region Central": "Omar Haddad",
+    "Region International": "Hana Sato",
+}
+
+# Userbase entries: P&L managers (submit), General Managers (review) + one executive (CFO)
 # Replace the email values below with the workspace identities that should
 # be granted access in your environment.
 USERBASE = [
@@ -322,6 +343,12 @@ USERBASE = [
     ("sofia.lopez@example.com",   "Sofia Lopez",   "Region Central",       "REGC", "General Manager"),
     ("noah.schmidt@example.com",  "Noah Schmidt",  "Region International", "REGI", "General Manager"),
     ("sam.carter@example.com",    "Sam Carter",    "Region North",         "CFO",  "Chief Financial Officer"),
+    ("jordan.lee@example.com",    "Jordan Lee",    "Region North",         "REGN", "P&L Manager"),
+    ("maya.singh@example.com",    "Maya Singh",    "Region South",         "REGS", "P&L Manager"),
+    ("lucas.romero@example.com",  "Lucas Romero",  "Region East",          "REGE", "P&L Manager"),
+    ("emma.fischer@example.com",  "Emma Fischer",  "Region West",          "REGW", "P&L Manager"),
+    ("omar.haddad@example.com",   "Omar Haddad",   "Region Central",       "REGC", "P&L Manager"),
+    ("hana.sato@example.com",     "Hana Sato",     "Region International", "REGI", "P&L Manager"),
 ]
 
 dept_ids = {}
@@ -373,9 +400,10 @@ with psycopg.connect(conn_string) as conn:
 # MAGIC %md
 # MAGIC ## Seed KPI Submissions
 # MAGIC
-# MAGIC Generates 13 historical (locked + reviewed) months and 2 in-progress months
-# MAGIC for each (region × KPI) combination. Mirrors `mock_data.py` so local dev
-# MAGIC and Lakebase look identical.
+# MAGIC Generates historical months (submitted by the P&L manager and approved by the GM)
+# MAGIC and 2 in-progress months for each (region × KPI) combination. In the previous
+# MAGIC month, Region North and Central have submitted KPIs 1–2 (awaiting GM review)
+# MAGIC and drafted KPI 3. Mirrors `mock_data.py` so local dev and Lakebase look identical.
 
 # COMMAND ----------
 
@@ -525,7 +553,8 @@ records = []
 for dept_name, lead in DEPARTMENTS:
     for period_name, p_start, p_end in PERIODS:
         is_historical = period_name in HISTORICAL_PERIODS
-        # Previous month: Region North + Central have started filing (first 3 KPIs only).
+        # Previous month: Region North + Central have started filing: KPIs 1-3 drafted,
+        # KPIs 1-2 submitted for GM review (not yet approved).
         is_prev_month_partial = (
             period_name == _prev_month_label
             and dept_name in ("Region North", "Region Central")
@@ -543,6 +572,7 @@ for dept_name, lead in DEPARTMENTS:
                 or (is_prev_month_partial and kpi_num <= 3)
                 # is_current_month → always False (no fill)
             )
+            kpi_submitted = is_historical or (is_prev_month_partial and kpi_num <= 2)
 
             records.append({
                 "id": str(uuid.uuid4()),
@@ -564,9 +594,9 @@ for dept_name, lead in DEPARTMENTS:
                 "planned_actions":          fill_or_blank(random.choice(PLANNED_ACTIONS), kpi_filled),
                 "expected_impact":          fill_or_blank(random.choice(EXPECTED_IMPACT), kpi_filled),
                 "sentiment_tags":           fill_or_blank(random.choice(SENTIMENT_TAGS), kpi_filled),
-                "kpi_lockin":               is_historical,
+                "kpi_lockin":               kpi_submitted,
                 "reviewed_by_gm":           lead if is_historical else "",
-                "submitted_by":             lead,
+                "submitted_by":             PNL_MANAGERS[dept_name],
             })
 
 print(f"Generated {len(records)} KPI submission records")
@@ -599,14 +629,12 @@ INSERT INTO kpi_submissions (
 with psycopg.connect(conn_string) as conn:
     conn.autocommit = True
     with conn.cursor() as cur:
-        # Truncate first so re-runs are fully idempotent — all KPI data is
-        # synthetic and regenerated above, so there is nothing worth keeping.
-        # RESTART IDENTITY resets any sequences; CASCADE covers the FK on
-        # kpi_submissions → departments (departments is truncated separately
-        # if needed, but kpi_submissions has no dependents so plain TRUNCATE
-        # is fine here).
-        cur.execute("TRUNCATE kpi_submissions")
-        print("Truncated kpi_submissions")
+        # Clear first so re-runs are fully idempotent — all KPI data is synthetic
+        # and regenerated above, so there is nothing worth keeping. DELETE (not
+        # TRUNCATE) so that, once Lakebase CDF is running (notebook 02), the removal
+        # replicates to Delta as row deletes and the Genie views drop the old rows.
+        cur.execute("DELETE FROM kpi_submissions")
+        print(f"Cleared {cur.rowcount} existing KPI submissions")
         for rec in records:
             cur.execute(INSERT_SQL, rec)
         print(f"Inserted {len(records)} KPI submissions")

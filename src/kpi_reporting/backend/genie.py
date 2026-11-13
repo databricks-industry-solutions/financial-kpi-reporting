@@ -58,7 +58,7 @@ class GenieClient:
             msg_id_early = init.message_id
 
             message = await asyncio.to_thread(waiter.result, timeout=_WAIT_TIMEOUT)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any Genie failure is returned as a FAILED result for the chat UI
             # Fetch the raw message to surface Genie's own error text rather than
             # the opaque SDK wrapper message ("failed to reach COMPLETED").
             error_detail = str(e)
@@ -70,8 +70,8 @@ class GenieClient:
                     if raw.error:
                         # raw.error is a MessageError dataclass; .error holds the string
                         error_detail = raw.error.error or str(raw.error)
-            except Exception:
-                pass
+            except Exception as fetch_error:  # noqa: BLE001 - best effort; keep the original error text
+                logger.debug(f"Could not fetch Genie's error detail: {fetch_error}")
             logger.warning(f"Genie message did not complete: {type(e).__name__}: {error_detail}")
             return {
                 "conversation_id": conv_id_early,
@@ -111,7 +111,7 @@ class GenieClient:
                             data_array = sr.result.data_array
                         row_count = len(data_array)
                         truncated = bool(manifest.truncated) if manifest else False
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - show the answer even if its result table can't be fetched
                     logger.warning(f"Failed to fetch query result for attachment {att.attachment_id}: {e}")
 
             attachments.append({

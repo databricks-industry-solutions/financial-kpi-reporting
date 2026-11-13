@@ -31,8 +31,11 @@ function isFilled(sub: SubmissionOut): boolean {
 }
 
 function fillBadge(sub: SubmissionOut) {
+  if (sub.reviewed_by_gm) {
+    return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-500/30 text-xs gap-1"><UserCheck size={10} /> Approved</Badge>;
+  }
   if (sub.kpi_lockin) {
-    return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30 text-xs gap-1"><Lock size={10} /> Locked</Badge>;
+    return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30 text-xs gap-1"><Lock size={10} /> Submitted</Badge>;
   }
   if (isFilled(sub)) {
     return <Badge className="bg-green-500/20 text-green-600 border-green-500/30 text-xs gap-1"><CheckCircle2 size={10} /> Filled</Badge>;
@@ -87,7 +90,7 @@ export function DepartmentDrilldown({ deptId, period, onClose }: DepartmentDrill
         <SheetHeader>
           <SheetTitle>{detail?.department?.name ?? "Region"}</SheetTitle>
           <SheetDescription>
-            {detail ? `${detail.kpi_count} KPIs | Fill Rate: ${detail.fill_rate}% | Lock Rate: ${detail.lock_rate}%` : "Loading..."}
+            {detail ? `${detail.kpi_count} KPIs | Fill Rate: ${detail.fill_rate}% | Submitted: ${detail.lock_rate}%` : "Loading..."}
             {period && ` | ${period}`}
           </SheetDescription>
         </SheetHeader>

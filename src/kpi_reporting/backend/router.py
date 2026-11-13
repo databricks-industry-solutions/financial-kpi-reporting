@@ -1,38 +1,37 @@
+from datetime import UTC
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .._metadata import api_prefix
-from .dependencies import RuntimeDep, ConfigDep
+from .dependencies import ConfigDep, RuntimeDep
+from .logger import logger
 from .models import (
-    VersionOut,
+    AiBiDashboardUrl,
+    ConfluencePublishResult,
     CurrentUser,
-    DepartmentOut,
-    SubmissionOut,
-    SubmissionUpdateRequest,
     DashboardSummary,
     DepartmentDetail,
-    ConfluencePublishResult,
-    PublishSubmissionsSummaryRequest,
-    PublishDashboardSummaryRequest,
-    GenieSpaceUrl,
+    DepartmentOut,
     GenieAskRequest,
     GenieAskResponse,
+    GenieSpaceUrl,
     JustifyRequest,
     NarrativeRequest,
     NarrativeResponse,
-    AiBiDashboardUrl,
-    TaskItem,
-    TaskAction,
-    TasksResponse,
-    RiskReport,
-    RiskItem,
+    PublishDashboardSummaryRequest,
+    PublishSubmissionsSummaryRequest,
     RegionRiskSummary,
-    ForecastPoint,
-    KpiForecast,
-    ForecastResponse,
+    RiskItem,
+    RiskReport,
+    SubmissionOut,
+    SubmissionUpdateRequest,
+    TaskAction,
+    TaskItem,
+    TasksResponse,
+    VersionOut,
 )
-from .logger import logger
 
 api = APIRouter(prefix=api_prefix)
 
@@ -45,6 +44,7 @@ async def version():
 # --- Current User ---
 
 JOB_ROLE_MAP = {
+    "P&L Manager": "pnl",
     "General Manager": "gm",
     "Business Line Manager": "blm",
     "Business Controller": "bc",
@@ -132,6 +132,9 @@ async def get_submission(sub_id: str, runtime: RuntimeDep):
 @api.put("/submissions/{sub_id}", response_model=SubmissionOut, operation_id="updateSubmission")
 async def update_submission(sub_id: str, req: SubmissionUpdateRequest, runtime: RuntimeDep):
     data = {k: v for k, v in req.model_dump().items() if v is not None}
+    if data.get("kpi_lockin"):
+        # Submitting (again) clears the GM's send-back flag.
+        data["sent_back_by"] = ""
     row = runtime.lakebase.update_submission(sub_id, data)
     if not row:
         raise HTTPException(status_code=404, detail=f"Submission {sub_id} not found")
@@ -278,7 +281,7 @@ async def genie_ask(req: GenieAskRequest, runtime: RuntimeDep, config: ConfigDep
             conversation_id=req.conversation_id,
         )
         return GenieAskResponse(**result)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface any Genie client failure as a 502
         logger.error(f"Genie ask failed: {e}")
         raise HTTPException(status_code=502, detail=f"Genie query failed: {e}")
 
@@ -334,7 +337,12 @@ async def agent_justify(req: JustifyRequest, runtime: RuntimeDep, config: Config
 @api.post("/agent/narrative", response_model=NarrativeResponse, operation_id="agentNarrative")
 async def agent_narrative(req: NarrativeRequest, runtime: RuntimeDep, config: ConfigDep):
     """Generate an executive narrative for the given period (non-streaming)."""
-    from .agent import _get_ai_client, _build_narrative_prompt, _NARRATIVE_SYSTEM, _MODEL
+    from .agent import (
+        _MODEL,
+        _NARRATIVE_SYSTEM,
+        _build_narrative_prompt,
+        _get_ai_client,
+    )
 
     submissions = runtime.lakebase.get_submissions(period=req.period)
     if not submissions:
@@ -375,145 +383,16 @@ async def agent_narrative(req: NarrativeRequest, runtime: RuntimeDep, config: Co
     return NarrativeResponse(narrative=narrative)
 
 
-
 # ---------------------------------------------------------------------------
-# Forecast endpoint
+# Tasks endpoint — drives the home page for the P&L manager, GM and CFO personas
 # ---------------------------------------------------------------------------
 
-@api.get("/forecast/kpi", response_model=ForecastResponse, operation_id="getKpiForecast")
-async def get_kpi_forecast(runtime: RuntimeDep):
-    """
-    Return 3-month ahead forecasts for the main KPIs using a linear trend (OLS) with a ±8% band.
-    Single DB query, no LLM call — sub-second response.
-    """
-    N_FORECAST = 3
-
-    # Data-driven: forecast whatever KPIs and periods are actually present, so this
-    # works for any KPI set defined in notebook 01. Ordering is by period_start (a
-    # real date), never by the "Mon YYYY" display string.
-    rows = runtime.lakebase.execute(
-        """
-        SELECT kpi_name, kpi_unit,
-               MIN(kpi_number) AS kpi_number,
-               TO_CHAR(period_start, 'Mon YYYY') AS period_label,
-               MIN(period_start) AS period_start,
-               SUM(kpi_value) AS total_value
-        FROM kpi_submissions
-        WHERE kpi_value IS NOT NULL
-        GROUP BY kpi_name, kpi_unit, period_start
-        ORDER BY MIN(kpi_number), kpi_name, period_start
-        """,
-        {},
-    )
-
-    # Chronological period order, derived from the data.
-    _period_starts: dict[str, str] = {}
-    for r in rows:
-        _period_starts.setdefault(r["period_label"], str(r["period_start"]))
-    PERIOD_ORDER = sorted(_period_starts, key=lambda p: _period_starts[p])
-
-    # KPI order follows kpi_number, matching how the KPIs are numbered in notebook 01.
-    KPI_CONFIGS: list[tuple[str, str]] = []
-    _seen: set[tuple[str, str]] = set()
-    for r in sorted(rows, key=lambda r: (r["kpi_number"], r["kpi_name"])):
-        key = (r["kpi_name"], r["kpi_unit"])
-        if key not in _seen:
-            _seen.add(key)
-            KPI_CONFIGS.append(key)
-
-    def _next_periods(last_label: str, n: int) -> list[str]:
-        """Continue the monthly sequence n months past `last_label` ("Mon YYYY")."""
-        from datetime import datetime
-
-        try:
-            d = datetime.strptime(last_label, "%b %Y")
-        except ValueError:
-            return []
-        out = []
-        year, month = d.year, d.month
-        for _ in range(n):
-            month += 1
-            if month > 12:
-                month = 1
-                year += 1
-            out.append(datetime(year, month, 1).strftime("%b %Y"))
-        return out
-
-    FORECAST_PERIODS = _next_periods(PERIOD_ORDER[-1], N_FORECAST) if PERIOD_ORDER else []
-
-    KPI_SET = set(KPI_CONFIGS)
-
-    # Group into {(name, unit): {period: value}}
-    raw_data: dict[tuple[str, str], dict[str, float]] = {k: {} for k in KPI_SET}
-    for r in rows:
-        key = (r["kpi_name"], r["kpi_unit"])
-        if key in raw_data:
-            raw_data[key][r["period_label"]] = float(r["total_value"])
-
-    # --- 2. Linear regression forecast per KPI (stdlib only, no numpy) ---
-    def _linreg_forecast(values: list[float], n_forecast: int, confidence: float = 0.08):
-        """Simple OLS linear trend + ±confidence band."""
-        n = len(values)
-        if n < 2:
-            last = values[-1] if values else 0.0
-            return [(last, last, last)] * n_forecast
-        xs = list(range(n))
-        mx = sum(xs) / n
-        my = sum(values) / n
-        ss_xy = sum((x - mx) * (y - my) for x, y in zip(xs, values))
-        ss_xx = sum((x - mx) ** 2 for x in xs)
-        slope = ss_xy / ss_xx if ss_xx else 0.0
-        intercept = my - slope * mx
-        result = []
-        for i in range(n, n + n_forecast):
-            mid = intercept + slope * i
-            band = abs(mid) * confidence
-            result.append((round(mid - band, 2), round(mid, 2), round(mid + band, 2)))
-        return result
-
-    def _trend_insight(name: str, unit: str, values: list[float]) -> str:
-        if len(values) < 2:
-            return f"{name} data is limited; forecast confidence is low."
-        recent = values[-3:]
-        avg_recent = sum(recent) / len(recent)
-        avg_all = sum(values) / len(values)
-        delta_pct = ((avg_recent - avg_all) / avg_all * 100) if avg_all else 0
-        direction = "trending upward" if delta_pct > 2 else "trending downward" if delta_pct < -2 else "broadly stable"
-        return (
-            f"{name} ({unit}) is {direction} with a recent average of "
-            f"{avg_recent:.1f} {unit} vs. {avg_all:.1f} {unit} overall."
-        )
-
-    # --- 3. Build response ---
-    forecasts: list[KpiForecast] = []
-    for kpi_name, kpi_unit in KPI_CONFIGS:
-        actuals = raw_data.get((kpi_name, kpi_unit), {})
-        ordered_values = [actuals[p] for p in PERIOD_ORDER if p in actuals]
-        if not ordered_values:
-            continue
-
-        fc_points = _linreg_forecast(ordered_values, len(FORECAST_PERIODS))
-
-        points: list[ForecastPoint] = []
-        for p in PERIOD_ORDER:
-            if p in actuals:
-                points.append(ForecastPoint(period=p, actual=actuals[p], is_forecast=False))
-        for p, (low, mid, high) in zip(FORECAST_PERIODS, fc_points):
-            points.append(ForecastPoint(period=p, low=low, mid=mid, high=high, is_forecast=True))
-
-        forecasts.append(KpiForecast(
-            kpi_name=kpi_name,
-            kpi_unit=kpi_unit,
-            points=points,
-            insight=_trend_insight(kpi_name, kpi_unit, ordered_values),
-        ))
-
-    return ForecastResponse(forecasts=forecasts)
+_JUSTIFICATION_FIELDS = ("key_drivers_quantitative", "key_drivers_qualitative", "internal_factors", "external_factors")
 
 
-# ---------------------------------------------------------------------------
-# Tasks endpoint — drives the home page for GM and CFO personas
-# ---------------------------------------------------------------------------
+def _is_justified(sub: dict) -> bool:
+    return any(sub.get(f) for f in _JUSTIFICATION_FIELDS)
+
 
 def _period_sort_key(period_label: str):
     """Sort key for a "Mon YYYY" period label.
@@ -533,16 +412,17 @@ def _period_sort_key(period_label: str):
 async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None = None):
     """
     Return persona-specific tasks.
-    persona = "gm"  -> regional lead: unfilled KPI justifications for their region
-    persona = "cfo" -> executive: periods with unlocked / unjustified submissions to review
+    persona = "pnl" -> P&L manager: KPIs in their region that still need a justification or submission
+    persona = "gm"  -> regional GM: submitted KPIs in their region that are awaiting review
+    persona = "cfo" -> executive: periods with KPIs not yet submitted, awaiting GM approval, or flagged
     """
     import uuid
 
     tasks: list[TaskItem] = []
 
-    if persona == "gm":
-        # For each period (most recent first), find submissions for the lead's region.
-        # If no department_id passed, fall back to first region (demo persona dept).
+    if persona in ("pnl", "gm"):
+        # Both regional personas work on one region's submissions, newest period first.
+        # Without a department_id, fall back to Region North (the demo personas' region).
         dept_id = department_id
         if not dept_id:
             depts = runtime.lakebase.get_departments()
@@ -551,51 +431,65 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
 
         all_subs = runtime.lakebase.get_submissions(department_id=dept_id) if dept_id else []
 
-        # Group by period, find the most recent open one
         by_period: dict[str, list] = {}
         for s in all_subs:
             p = s.get("period_label") or s.get("period", "")
             by_period.setdefault(p, []).append(s)
 
-        # Sort periods newest first using PERIOD_ORDER
-        sorted_periods = sorted(
-            by_period.keys(),
-            key=_period_sort_key,
-            reverse=True,
-        )
-
+        sorted_periods = sorted(by_period.keys(), key=_period_sort_key, reverse=True)
         active_period = sorted_periods[0] if sorted_periods else ""
 
-        for period in sorted_periods[:3]:  # show tasks for up to last 3 periods
+        for period in sorted_periods[:3]:  # show tasks for up to the last 3 periods
             subs = by_period[period]
             total = len(subs)
-            needs_justification = [
-                s for s in subs
-                if not s.get("kpi_lockin") or not any(
-                    s.get(f) for f in ("key_drivers_quantitative", "key_drivers_qualitative",
-                                       "internal_factors", "external_factors")
-                )
-            ]
-            count = len(needs_justification)
+            if persona == "pnl":
+                # P&L manager: justify each KPI and submit it for GM review.
+                count = sum(1 for s in subs if not s.get("kpi_lockin") or not _is_justified(s))
+                awaiting = 0
+                sent_back = [s for s in subs if s.get("sent_back_by") and not s.get("kpi_lockin")]
+                title = f"Submit KPI justifications — {period}"
+                done_text = f"All {total} KPIs justified and submitted for review."
+                open_text = f"{count} of {total} KPIs still need a justification or submission."
+                if sent_back:
+                    n = len(sent_back)
+                    open_text = (f"{n} KPI{'s' if n != 1 else ''} sent back by "
+                                 f"{sent_back[0]['sent_back_by']} for changes · {open_text}")
+                route = "/kpi-submission"
+            else:
+                # GM: review and approve what the P&L manager submitted.
+                count = sum(1 for s in subs if not s.get("reviewed_by_gm"))
+                awaiting = sum(1 for s in subs if s.get("kpi_lockin") and not s.get("reviewed_by_gm"))
+                sent_back = [s for s in subs if s.get("sent_back_by") and not s.get("kpi_lockin")]
+                not_submitted = count - awaiting - len(sent_back)
+                title = f"Review KPI submissions — {period}"
+                done_text = f"All {total} KPIs reviewed and approved."
+                parts = []
+                if awaiting:
+                    parts.append(f"{awaiting} KPI{'s' if awaiting != 1 else ''} awaiting your review")
+                if sent_back:
+                    parts.append(f"{len(sent_back)} sent back for changes")
+                if not_submitted:
+                    parts.append(f"{not_submitted} not yet submitted by the P&L manager")
+                open_text = " · ".join(parts)
+                route = "/kpi-review"
+
             if count == 0:
                 status = "done"
-            elif count < total:
+            elif count < total or awaiting > 0:
                 status = "in_progress"
             else:
                 status = "pending"
 
             tasks.append(TaskItem(
                 id=str(uuid.uuid4()),
-                title=f"Submit KPI justifications — {period}",
-                description=(
-                    f"All {total} KPIs justified and locked." if status == "done"
-                    else f"{count} of {total} KPIs still need justification or sign-off."
-                ),
+                title=title,
+                description=done_text if status == "done" else open_text,
                 period=period,
                 status=status,
                 count=count,
                 total=total,
-                route="/kpi-submission",
+                sent_back_count=len(sent_back) or None,
+                route=route,
             ))
 
         return TasksResponse(tasks=tasks, period=active_period)
@@ -628,7 +522,10 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
         for period in periods_with_data[:3]:
             subs = by_period[period]
             total = len(subs)
+            # kpi_lockin = submitted by the P&L manager; reviewed_by_gm = approved by the GM.
             locked = sum(1 for s in subs if s.get("kpi_lockin"))
+            approved = sum(1 for s in subs if s.get("reviewed_by_gm"))
+            awaiting = sum(1 for s in subs if s.get("kpi_lockin") and not s.get("reviewed_by_gm"))
             justified = sum(1 for s in subs if any(
                 s.get(f) for f in ("key_drivers_quantitative", "key_drivers_qualitative",
                                    "internal_factors", "external_factors")
@@ -641,14 +538,16 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
             ]
             unlocked = total - locked
 
-            if locked == total and justified == total and not negative:
+            if approved == total and justified == total and not negative:
                 status = "done"
-                desc = f"All {total} KPIs locked and justified — no issues flagged."
+                desc = f"All {total} KPIs justified and approved — no issues flagged."
             else:
                 status = "in_progress" if locked > 0 or justified > 0 else "pending"
                 parts = []
                 if unlocked > 0:
-                    parts.append(f"{unlocked} KPI{'s' if unlocked > 1 else ''} not yet locked")
+                    parts.append(f"{unlocked} KPI{'s' if unlocked > 1 else ''} not yet submitted")
+                if awaiting > 0:
+                    parts.append(f"{awaiting} awaiting GM approval")
                 if negative:
                     dept_names = list({s.get("department_name", "Unknown") for s in negative})
                     kpi_names = list({s.get("kpi_name", "") for s in negative})
@@ -657,13 +556,13 @@ async def get_tasks(persona: str, runtime: RuntimeDep, department_id: str | None
                         f" ({', '.join(kpi_names[:3])})"
                         f" — {', '.join(dept_names[:3])}"
                     )
-                desc = " · ".join(parts) if parts else f"{justified}/{total} justified · {locked}/{total} locked."
+                desc = " · ".join(parts) if parts else f"{justified}/{total} justified · {approved}/{total} approved."
 
             # Build context-driven actions
             period_actions: list[TaskAction] = []
 
             if status == "done":
-                # Everything locked and clean — only offer narrative
+                # Everything approved and clean — only offer narrative
                 period_actions.append(TaskAction(
                     label="Executive Narrative",
                     route="/executive-dashboard",
@@ -792,7 +691,7 @@ def _build_risk_prompt(period: str, submissions: list[dict]) -> str:
         lines.append(entry)
 
     subs_text = "\n\n".join(lines)
-    cc_count = len(set(s.get("department_name") for s in submissions))
+    cc_count = len({s.get("department_name") for s in submissions})
 
     return _RISK_PROMPT_TEMPLATE.format(
         period=period,
@@ -806,8 +705,9 @@ def _build_risk_prompt(period: str, submissions: list[dict]) -> str:
 async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, config: ConfigDep):
     """Generate an AI risk report for the given period."""
     import json as _json
-    from datetime import datetime, timezone
-    from .agent import _get_ai_client, _MODEL
+    from datetime import datetime
+
+    from .agent import _MODEL, _get_ai_client
 
     submissions = runtime.lakebase.get_submissions(period=req.period)
     # Only analyse filled submissions — no point analysing blanks
@@ -824,12 +724,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
         )]
         if all_filled:
             # Sort by period_start descending to find the most recent filled period.
-            def _period_key(s):
-                try:
-                    return str(s.get("period_start") or "")
-                except Exception:
-                    return ""
-            latest = max(all_filled, key=_period_key)
+            latest = max(all_filled, key=lambda s: str(s.get("period_start") or ""))
             latest_period = latest.get("period", "unknown")
             raise HTTPException(status_code=404, detail=f"No filled submissions found for {req.period}. Latest submission is for {latest_period}.")
         else:
@@ -857,7 +752,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
             b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
             for b in raw
             if (isinstance(b, dict) and b.get("type") == "text")
-            or (hasattr(b, "type") and getattr(b, "type") == "text")
+            or getattr(b, "type", None) == "text"
         )
     else:
         text = raw or ""
@@ -872,7 +767,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
 
     try:
         data = _json.loads(text)
-    except Exception as e:
+    except ValueError as e:
         # Try to extract a valid JSON object even if truncated
         logger.warning(f"RiskReport initial parse failed: {e} — attempting recovery")
         try:
@@ -882,7 +777,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
                 data = _json.loads(text[:last_brace + 1])
             else:
                 raise ValueError("No closing brace found")
-        except Exception as e2:
+        except ValueError as e2:
             logger.error(f"RiskReport JSON recovery failed: {e2}\n{text[:300]}")
             raise HTTPException(status_code=500, detail="Risk model returned invalid JSON")
 
@@ -905,7 +800,7 @@ async def generate_risk_report(req: RiskReportRequest, runtime: RuntimeDep, conf
 
     return RiskReport(
         period=req.period,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         executive_summary=data.get("executive_summary", ""),
         top_risks=[RiskItem(**_norm_risk(r)) for r in data.get("top_risks", [])],
         region_summaries=[RegionRiskSummary(**_norm_cc(s)) for s in data.get("region_summaries", [])],

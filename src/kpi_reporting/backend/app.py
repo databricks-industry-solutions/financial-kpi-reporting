@@ -5,10 +5,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .._metadata import app_name, dist_dir
 from .config import AppConfig
+from .logger import logger
 from .router import api
 from .runtime import Runtime
 from .utils import add_not_found_handler
-from .logger import logger
 
 
 @asynccontextmanager

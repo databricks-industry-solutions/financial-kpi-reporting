@@ -12,7 +12,7 @@ interface DeptStats {
   department: DepartmentOut;
   kpiCount: number;
   filledCount: number;
-  lockedCount: number;
+  approvedCount: number;
   fillPct: number;
   positiveCount: number;
   neutralCount: number;
@@ -42,7 +42,8 @@ function computeDeptStats(departments: DepartmentOut[], submissions: SubmissionO
     const deptSubs = submissions.filter((s) => s.department_id === dept.id);
     const filledSubs = deptSubs.filter(isFilled);
     const filledCount = filledSubs.length;
-    const lockedCount = deptSubs.filter((s) => s.kpi_lockin).length;
+    // A region's KPIs are complete once its GM has approved them.
+    const approvedCount = deptSubs.filter((s) => !!s.reviewed_by_gm).length;
     const fillPct = deptSubs.length > 0 ? Math.round((filledCount / deptSubs.length) * 100) : 0;
 
     // Only count sentiment for filled submissions
@@ -50,7 +51,7 @@ function computeDeptStats(departments: DepartmentOut[], submissions: SubmissionO
     const cautiousCount = filledSubs.filter(s => sentimentBucket(s.sentiment_tags) === "cautious").length;
     const neutralCount = filledSubs.filter(s => sentimentBucket(s.sentiment_tags) === "neutral").length;
 
-    return { department: dept, kpiCount: deptSubs.length, filledCount, lockedCount, fillPct, positiveCount, neutralCount, cautiousCount };
+    return { department: dept, kpiCount: deptSubs.length, filledCount, approvedCount, fillPct, positiveCount, neutralCount, cautiousCount };
   });
 }
 
@@ -61,8 +62,8 @@ function cardBorder(fillPct: number, cautiousCount: number): string {
   return "border-red-500/50 bg-red-500/5";
 }
 
-function statusBadge(fillPct: number, lockedCount: number, kpiCount: number) {
-  if (lockedCount === kpiCount && kpiCount > 0)
+function statusBadge(fillPct: number, approvedCount: number, kpiCount: number) {
+  if (approvedCount === kpiCount && kpiCount > 0)
     return <Badge className="bg-green-500/20 text-green-600 border-green-500/30 text-xs">Complete</Badge>;
   if (fillPct >= 50)
     return <Badge className="bg-yellow-500/20 text-yellow-600 border-yellow-500/30 text-xs">In Progress</Badge>;
@@ -116,7 +117,7 @@ export function DepartmentGrid({ period, onSelectDepartment }: DepartmentGridPro
 
   return (
     <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
-      {stats.map(({ department, kpiCount, filledCount, lockedCount, fillPct, positiveCount, cautiousCount }) => (
+      {stats.map(({ department, kpiCount, filledCount, approvedCount, fillPct, positiveCount, cautiousCount }) => (
         <Card
           key={department.id}
           className={`cursor-pointer transition-all hover:shadow-md ${cardBorder(fillPct, cautiousCount)}`}
@@ -125,7 +126,7 @@ export function DepartmentGrid({ period, onSelectDepartment }: DepartmentGridPro
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-sm font-semibold leading-tight">{department.name}</CardTitle>
-              {statusBadge(fillPct, lockedCount, kpiCount)}
+              {statusBadge(fillPct, approvedCount, kpiCount)}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">Lead: {department.lead_name}</p>
           </CardHeader>

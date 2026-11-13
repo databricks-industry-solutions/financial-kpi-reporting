@@ -27,10 +27,10 @@ export function SummaryCards({ summary, isLoading }: SummaryCardsProps) {
       description: "KPIs with qualitative input",
     },
     {
-      title: "Locked In",
+      title: "Submitted",
       value: summary ? summary.locked_entries.toLocaleString() : "—",
       icon: <Lock className="h-4 w-4 text-muted-foreground" />,
-      description: "KPIs finalized and locked",
+      description: "KPIs submitted by P&L managers",
     },
     {
       title: "Centers Reporting",

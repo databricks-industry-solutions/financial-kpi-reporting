@@ -45,19 +45,6 @@ export interface DepartmentOut {
   name: string;
 }
 
-export interface ForecastPoint {
-  actual?: number | null;
-  high?: number | null;
-  is_forecast?: boolean;
-  low?: number | null;
-  mid?: number | null;
-  period: string;
-}
-
-export interface ForecastResponse {
-  forecasts: KpiForecast[];
-}
-
 export interface GenieAskRequest {
   content: string;
   conversation_id?: string | null;
@@ -92,13 +79,6 @@ export interface HTTPValidationError {
 export interface JustifyRequest {
   field: string;
   submission_id: string;
-}
-
-export interface KpiForecast {
-  insight: string;
-  kpi_name: string;
-  kpi_unit: string;
-  points: ForecastPoint[];
 }
 
 export interface NarrativeRequest {
@@ -173,6 +153,7 @@ export interface SubmissionOut {
   period_start: string;
   planned_actions: string;
   reviewed_by_gm: string;
+  sent_back_by?: string;
   sentiment_tags: string;
   submitted_at: string;
   submitted_by: string;
@@ -189,6 +170,7 @@ export interface SubmissionUpdateRequest {
   oneoff_events?: string | null;
   planned_actions?: string | null;
   reviewed_by_gm?: string | null;
+  sent_back_by?: string | null;
   sentiment_tags?: string | null;
 }
 
@@ -206,6 +188,7 @@ export interface TaskItem {
   negative_count?: number | null;
   period: string;
   route?: string | null;
+  sent_back_count?: number | null;
   status: string;
   title: string;
   total?: number | null;
@@ -432,29 +415,6 @@ export function useGetDepartments<TData = { data: DepartmentOut[] }>(options?: {
 
 export function useGetDepartmentsSuspense<TData = { data: DepartmentOut[] }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: DepartmentOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
   return useSuspenseQuery({ queryKey: getDepartmentsKey(), queryFn: () => getDepartments(), ...options?.query });
-}
-
-export const getKpiForecast = async (options?: RequestInit): Promise<{ data: ForecastResponse }> => {
-  const res = await fetch("/api/forecast/kpi", { ...options, method: "GET" });
-  if (!res.ok) {
-    const body = await res.text();
-    let parsed: unknown;
-    try { parsed = JSON.parse(body); } catch { parsed = body; }
-    throw new ApiError(res.status, res.statusText, parsed);
-  }
-  return { data: await res.json() };
-};
-
-export const getKpiForecastKey = () => {
-  return ["/api/forecast/kpi"] as const;
-};
-
-export function useGetKpiForecast<TData = { data: ForecastResponse }>(options?: { query?: Omit<UseQueryOptions<{ data: ForecastResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
-  return useQuery({ queryKey: getKpiForecastKey(), queryFn: () => getKpiForecast(), ...options?.query });
-}
-
-export function useGetKpiForecastSuspense<TData = { data: ForecastResponse }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: ForecastResponse }, ApiError, TData>, "queryKey" | "queryFn"> }) {
-  return useSuspenseQuery({ queryKey: getKpiForecastKey(), queryFn: () => getKpiForecast(), ...options?.query });
 }
 
 export const genieAsk = async (data: GenieAskRequest, options?: RequestInit): Promise<{ data: GenieAskResponse }> => {

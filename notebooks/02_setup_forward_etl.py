@@ -239,8 +239,9 @@ for line in status_lines:
 # MAGIC ## Step 5 — Create clean views for Genie
 # MAGIC
 # MAGIC Lakebase CDF creates `lb_<table>_history` tables with CDC columns
-# MAGIC (`_change_type`, `_timestamp`, `_lsn`, `_xid`). These views filter to the
-# MAGIC latest row state so the Genie Space can query them without reconfiguration.
+# MAGIC (`_pg_change_type`, `_timestamp`, `_pg_lsn`, `_pg_xid`). These views keep the
+# MAGIC latest state of each row (deleted rows drop out) and show UUID columns as text,
+# MAGIC so the Genie Space can query them without reconfiguration.
 
 # COMMAND ----------
 
@@ -262,9 +263,19 @@ else:
         "kpi_submissions": "id",
     }
 
+    # Read each table's destination from the CDF statuses instead of assuming
+    # lb_<table>_history: if the schema already holds history tables from an earlier
+    # CDF config, CDF writes to a new name (e.g. lb_kpi_submissions_history_1) and the
+    # old tables stop receiving changes.
+    UC_HISTORY = {
+        s.postgres_table: s.uc_table
+        for s in w.postgres.list_cdf_statuses(parent=_config_path)
+        if getattr(s, "uc_table", None)
+    }
+
     for table in TABLES:
-        history_fqn = f"{SYNC_CATALOG}.{SYNC_SCHEMA}.lb_{table}_history"
-        history_table = f"`{SYNC_CATALOG}`.`{SYNC_SCHEMA}`.`lb_{table}_history`"
+        history_fqn = UC_HISTORY.get(table) or f"{SYNC_CATALOG}.{SYNC_SCHEMA}.lb_{table}_history"
+        history_table = ".".join(f"`{part}`" for part in history_fqn.split("."))
         view_name = f"`{CATALOG}`.`{SCHEMA}`.`{table}`"
         pk = PK_COLUMN[table]
 
@@ -275,13 +286,22 @@ else:
             except Exception:
                 pass
 
-        # Get business columns (everything that isn't CDC metadata)
-        all_columns = [
-            col.name for col in spark.table(history_fqn).schema
-            if col.name not in CDC_COLUMNS
-        ]
-        select_cols = ", ".join(f"`{c}`" for c in all_columns)
+        # Business columns (everything that isn't CDC metadata). Lakebase CDF lands
+        # Postgres UUID columns as BINARY, so expose those as the usual UUID text
+        # (8-4-4-4-12) to keep IDs readable in Genie answers.
+        def _column_expr(field):
+            if field.dataType.typeName() == "binary":
+                return (
+                    f"lower(regexp_replace(hex(`{field.name}`), "
+                    f"'^(.{{8}})(.{{4}})(.{{4}})(.{{4}})(.{{12}})$', '$1-$2-$3-$4-$5')) AS `{field.name}`"
+                )
+            return f"`{field.name}`"
 
+        select_cols = ", ".join(
+            _column_expr(f) for f in spark.table(history_fqn).schema if f.name not in CDC_COLUMNS
+        )
+
+        # Latest state per row; rows whose latest change is a delete drop out.
         spark.sql(f"""
             CREATE OR REPLACE VIEW {view_name} AS
             SELECT {select_cols}
@@ -289,11 +309,11 @@ else:
                 SELECT *,
                     ROW_NUMBER() OVER (PARTITION BY `{pk}` ORDER BY `_sort_by` DESC) AS _rn
                 FROM {history_table}
-                WHERE `_pg_change_type` IN ('insert', 'update_postimage')
+                WHERE `_pg_change_type` IN ('insert', 'update_postimage', 'delete')
             )
-            WHERE _rn = 1
+            WHERE _rn = 1 AND `_pg_change_type` != 'delete'
         """)
-        print(f"Created view: {CATALOG}.{SCHEMA}.{table}  (PK: {pk})")
+        print(f"Created view: {CATALOG}.{SCHEMA}.{table}  (PK: {pk}, source: {history_fqn})")
 
 # COMMAND ----------
 
@@ -357,14 +377,18 @@ else:
         "    expr: dept.lead_name",
         "  - name: KPI",
         "    expr: kpi_name",
+        "  - name: KPI Number",
+        "    expr: kpi_number",
         "  - name: KPI Category",
         "    expr: kpi_category",
         "  - name: Reporting Month",
         "    expr: period_start",
         "  - name: Period",
         "    expr: period",
+        "  - name: Sentiment",
+        "    expr: sentiment_tags",
         "  - name: Status",
-        "    expr: CASE WHEN kpi_lockin THEN 'Locked' ELSE 'Pending' END",
+        "    expr: CASE WHEN reviewed_by_gm <> '' THEN 'Approved' WHEN kpi_lockin THEN 'Awaiting review' ELSE 'Not submitted' END",
         "measures:",
         "  - name: Submissions",
         "    expr: COUNT(1)",
@@ -372,8 +396,16 @@ else:
         "    expr: COUNT_IF(kpi_lockin)",
         "  - name: Lock Rate",
         "    expr: COUNT_IF(kpi_lockin) / COUNT(1)",
+        "  - name: Awaiting GM Review",
+        "    expr: COUNT_IF(kpi_lockin AND reviewed_by_gm = '')",
         "  - name: Reviewed Rate",
         "    expr: COUNT_IF(reviewed_by_gm <> '') / COUNT(1)",
+        "  - name: Justified Submissions",
+        "    expr: COUNT_IF(key_drivers_quantitative <> '')",
+        "  - name: Justified Rate",
+        "    expr: COUNT_IF(key_drivers_quantitative <> '') / COUNT(1)",
+        "  - name: Reporting Periods",
+        "    expr: COUNT(DISTINCT period)",
         "  - name: Regions Reporting",
         "    expr: COUNT(DISTINCT department_id)",
         "  - name: Avg KPI Value",

@@ -14,19 +14,28 @@ jobs:
   validate-bundle:
     runs-on: ubuntu-latest
     name: Validate Databricks Bundle
+    # Validation resolves the workspace user for the bundle root path, so it needs
+    # workspace credentials. Secrets are not available to Dependabot or fork PRs;
+    # skip the check there instead of failing it.
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
+      # Bundles need the current Databricks CLI; the `databricks-cli` pip package is
+      # the legacy CLI and has no `bundle` command.
       - name: Install Databricks CLI
-        run: pip install databricks-cli
+        if: env.DATABRICKS_TOKEN != ''
+        uses: databricks/setup-cli@main
 
       - name: Validate bundle
+        if: env.DATABRICKS_TOKEN != ''
         run: databricks bundle validate
+
+      - name: Skip (no workspace credentials)
+        if: env.DATABRICKS_TOKEN == ''
+        run: echo "::notice::DATABRICKS_HOST / DATABRICKS_TOKEN are not available to this run; skipped bundle validation."
 
   build-and-test:
     runs-on: ubuntu-latest
@@ -50,24 +59,27 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
+      # --locked fails if uv.lock is out of date with pyproject.toml.
       - name: Sync Python deps
-        run: uv sync
+        run: uv sync --locked
 
       - name: Install JS deps
         run: bun install --frozen-lockfile
 
-      - name: Lint Python (ruff)
-        run: |
-          uv run pip install ruff
-          uv run ruff check src/
-
-      - name: Type-check Python (pyright)
-        run: |
-          uv run pip install pyright
-          uv run pyright src/
-
+      # Build first: it generates src/kpi_reporting/_metadata.py, which the backend
+      # imports and pyright needs to resolve.
       - name: Build frontend & backend
         run: uv run apx build
+
+      - name: Lint Python (ruff)
+        run: uv run --with ruff ruff check src/
+
+      - name: Type-check Python (pyright)
+        run: uv run --with pyright pyright src/
+
+      # Needs the route tree the build generates (src/kpi_reporting/ui/types/routeTree.gen.ts).
+      - name: Type-check frontend (tsc)
+        run: bun x tsc --noEmit -p tsconfig.json
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -93,13 +105,12 @@ jobs:
       - name: Install uv
         run: pip install uv
 
-      - name: Sync Python deps
-        run: uv sync
-
+      # Audit exactly the locked runtime dependencies (not dev tooling, and not the
+      # auditing tool's own environment).
       - name: Python — pip-audit
         run: |
-          uv run pip install pip-audit
-          uv run pip-audit --strict --progress-spinner=off
+          uv export --locked --no-dev --format requirements-txt --no-emit-project > requirements-audit.txt
+          uvx pip-audit --strict --progress-spinner=off --no-deps --disable-pip -r requirements-audit.txt
 
       - name: Set up Node
         uses: actions/setup-node@v7

@@ -2,22 +2,23 @@
 
 ## Purpose
 
-A web application that centralizes financial KPI reporting across global Regions. It replaces manual spreadsheet-based reporting with a structured submission, review, and publishing workflow - giving regional leads a clear process and executives real-time visibility into financial performance.
+A web application that centralizes financial KPI reporting across global Regions. It replaces manual spreadsheet-based reporting with a structured submission, review, and publishing workflow - giving P&L managers and their GMs a clear submit-and-review process and executives real-time visibility into financial performance.
 
 ## Users & Personas
 
 | Persona | Role | What they do in the app |
 |---|---|---|
-| **Regional Lead** | Regional finance owner | Submits KPI actuals, provides justifications, reviews and publishes results |
+| **P&L Manager** | Regional finance owner | Drafts each KPI's justification (with AI help), submits it for review, and revises KPIs the GM sends back |
+| **General Manager** | Regional business owner | Reviews the region's submitted KPIs, approves them or sends them back, and publishes results |
 | **Chief Financial Officer** | Executive oversight | Monitors performance across all regions, drills into underperforming areas, asks ad-hoc questions via AI |
 
 ## Core Capabilities
 
 ### 1. KPI Submission & Review
 
-- Regional Leads see their KPIs with targets pre-loaded for each reporting period
+- P&L managers see their region's KPIs with targets pre-loaded for each reporting period
 - For each KPI, they enter the actual value and a written justification explaining the result
-- Submissions follow a simple lifecycle: **Pending Review** → **Reviewed** → **Published**
+- Submissions follow a simple lifecycle: **Draft** → **Submitted** (awaiting GM review) → **Approved** → **Published**. The GM can send a submission back to the P&L manager for changes; it is then flagged **Sent back** (with the GM's name) until the P&L manager resubmits it
 - Published KPIs are automatically pushed to Confluence as formal documentation
 
 ### 2. Executive Dashboard
@@ -62,7 +63,7 @@ Lakebase   Confluence   Genie    │
 
 | Component | Technology | Purpose |
 |---|---|---|
-| **Frontend** | React, TanStack Router, Recharts | Interactive UI with filtering, charts, and real-time data |
+| **Frontend** | React, TanStack Router, Tailwind | Interactive UI with filtering and real-time data; charts come from the embedded AI/BI dashboard |
 | **Backend** | Python / FastAPI | API layer, business logic, credential management |
 | **Database** | Databricks Lakebase (managed PostgreSQL) | Structured storage for KPIs, departments, and categories |
 | **Documentation** | Confluence REST API | Automated publishing of KPI reports and executive summaries |
